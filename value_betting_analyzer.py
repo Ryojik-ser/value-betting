@@ -799,10 +799,9 @@ def market_legs(review: MatchReview, cfg: dict) -> list[Leg]:
             for mk, sel, p, src in raw if 0 < p < 1]
 
 
-def best_leg(review: MatchReview, cfg: dict) -> Leg | None:
-    ok = [lg for lg in market_legs(review, cfg)
-          if lg.prob >= cfg["LEG_MIN_PROB"] and cfg["LEG_MIN_ODDS"] <= lg.min_odds <= cfg["LEG_MAX_ODDS"]]
-    return max(ok, key=lambda lg: lg.prob) if ok else None
+def valid_legs(review: MatchReview, cfg: dict) -> list[Leg]:
+    return [lg for lg in market_legs(review, cfg)
+            if lg.prob >= cfg["LEG_MIN_PROB"] and cfg["LEG_MIN_ODDS"] <= lg.min_odds <= cfg["LEG_MAX_ODDS"]]
 
 
 def build_parlays(reviews: list[MatchReview], cfg: dict) -> list[dict]:
@@ -811,17 +810,20 @@ def build_parlays(reviews: list[MatchReview], cfg: dict) -> list[dict]:
     from itertools import combinations
     from math import prod
 
-    pool = sorted(filter(None, (best_leg(r, cfg) for r in reviews)), key=lambda lg: lg.prob, reverse=True)[:10]
-    if len(pool) < 2:
+    pool = sorted((lg for r in reviews for lg in valid_legs(r, cfg)), key=lambda lg: lg.prob, reverse=True)[:40]
+    if len({lg.event_id for lg in pool}) < 2:
         return []
     max_legs = max(2, int(cfg["PARLAY_MAX_LEGS"]))
-    combos = [c for n in range(2, max_legs + 1) for c in combinations(pool, n)]
+    combos = [c for n in range(2, max_legs + 1) for c in combinations(pool, n)
+              if len({lg.event_id for lg in c}) == n]  # una selección por partido
 
     def make(name, legs):
         prob = prod(lg.prob for lg in legs)
         return {"name": name, "legs": list(legs), "prob": prob, "odds": 1 / prob}
 
-    out = [make("🛡️ Doble más segura", pool[:2])]
+    first = pool[0]
+    second = next(lg for lg in pool if lg.event_id != first.event_id)
+    out = [make("🛡️ Doble más segura", [first, second])]
     for name, target in (("💵 Para doblar tus $ (≥ +100)", 2.0), ("🚀 Estilo de tu ticket (≥ +145)", 2.45)):
         cands = [c for c in combos if 1 / prod(lg.prob for lg in c) >= target
                  and prod(lg.prob for lg in c) >= cfg["PARLAY_MIN_PROB"]]
