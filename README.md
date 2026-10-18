@@ -151,24 +151,74 @@ Desde el celular: como *Variables* en GitHub. En PC: dentro de `config.json`.
 | `TIMEZONE` | `America/Mexico_City` | Zona horaria del informe. |
 | `REGIONS` | `eu` | Regiones de casas en The Odds-API (`eu`, `uk`, `us`, `au`). Cada región extra multiplica los créditos. |
 
-## Ejemplo de informe (modo seguro)
+## Ejemplo de informe (datos de prueba)
+
+En Telegram los momios salen en recuadro, los títulos en negritas y las notas del analista en un bloque plegable (tócalo para abrirlo).
 
 ```
-🛡️ Picks de alta probabilidad · 18/10/2026
-Partidos revisados: 4 · Picks: 3
+📊 APUESTAS DEL DÍA
+Dom 18 oct · BetMéxico · $5 por apuesta
 
-De estos 3 picks, lo esperable es fallar ≈ 0.9.
-Abre BetMéxico y apuesta solo si su cuota es igual o mayor a la indicada.
+🔎 5 partidos revisados
+✅ 4 sencillas · 🎰 3 parlays · 🐺 3 no favoritos
 
-1. Arsenal vs Chelsea
-🏆 Premier League · 🕒 18/10 06:00
-🎯 1X – Arsenal o empate (doble oportunidad)
-✅ Probabilidad de acierto: 75%
-📱 En BetMéxico: cuota mínima 1.34
-💰 Stake fijo: 2% de banca ≈ 20.00
+📱 Apuesta solo si BetMéxico paga igual o más que el momio indicado.
+Ej.: -300 paga más que -400.
+
+━━━━━━━━━━━━━━━
+🩵 MANCHESTER CITY · hoy 12:00
+vs Wolves · Premier League · local
+
+📊 Man City 74% · Empate 16% · Wolves 9%
+⚽ Goles esperados 2.4 – 0.8
+👤 Haaland: ≈33% de los goles del equipo (referencia)
+
+Equipo
+✅ Man City o empate -971 · 91% · +$0.51
+✅ Gana Man City -292 · 74% · +$1.71
+✅ Man City más de 1.5 goles -213 · ≈68% · +$2.35
+✅ Gana Man City + más de 1.5 goles -166 · ≈62% · +$3.01
+🎲 Man City no recibe gol +123 · ≈45% · +$6.17
+
+Haaland
+⚠️ Haaland anota -114 · ≈53% · +$4.38
+⚠️ Gana Man City + Haaland anota +121 · ≈45% · +$6.03
+🎲 Haaland 2 o más goles +478 · ≈17% · +$23.90
+✅ ≥60% · ⚠️ 45–60% · 🎲 <45% · Confirma que Haaland sea titular.
+
+━━━━━━━━━━━━━━━
+✅ SENCILLAS · $5 c/u
+De 4, lo normal es fallar ~1.
+
+1. Arsenal o empate -296
+Arsenal vs Chelsea · 08:00 · Premier League
+75% · ganas $1.69
+
+2. Gana Man City -292
+Man City vs Wolves · 12:00 · Premier League
+74% · ganas $1.71
+
+3. Real Betis o empate -246
+Real Betis vs Sevilla · 09:00 · La Liga
+71% · ganas $2.03
+
+4. Gana Inter -197
+Inter vs Torino · 11:00 · Serie A
+66% · ganas $2.54
+
+━━━━━━━━━━━━━━━
+🎰 PARLAYS · $5 c/u
+
+🛡️ Segura · 70% · -236
+$5 → cobras $7.12
+├ Inter o empate -662 · 87%
+│  Inter vs Torino · 11:00
+└ Más de 1.5 goles -423 · ≈81%
+   Man City vs Wolves · 12:00
+
+💵 Dobla tu dinero · 50% · +101
+$5 → cobras $10.05
 ...
-📒 Historial
-42 picks liquidados · Aciertos 73.8% (esperado 72.1%) · ROI +1.9%
 ```
 
 ## Pruebas

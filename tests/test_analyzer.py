@@ -30,8 +30,8 @@ def test_demo_finds_value_and_ranks_by_ev():
     report = vba.strip_html(vba.run(cfg(), demo=True, telegram=False))
     assert "Chelsea @ +320 (4.20)" in report
     assert "Empate @ +260 (3.60)" in report
-    assert report.index("Chelsea") < report.index("Empate")      # mayor EV primero
-    assert "pocas casas" in report                              # Getafe-Osasuna
+    assert report.index("Chelsea @") < report.index("Empate @")      # mayor EV primero
+    assert "Getafe–Osasuna" in report                           # sin pick (pocas casas)
 
 
 def test_bookmaker_filter_excludes_other_books():
@@ -66,15 +66,14 @@ def test_split_message():
 
 def test_safe_mode_high_probability_picks():
     report = vba.strip_html(vba.run(cfg(MODE="seguro"), demo=True, telegram=False))
-    assert "1X – Arsenal o empate" in report
-    assert "momio mínimo -296 (1.34)" in report
-    assert "1 – Inter" in report                                 # 1X pagaría < 1.20
+    assert "Arsenal o empate -296" in report
+    assert "Gana Inter -197" in report                                # 1X pagaría < 1.20
     assert report.index("Arsenal") < report.index("Inter")       # más probable primero
 
 
 def test_safe_mode_respects_min_prob():
     report = vba.run(cfg(MODE="seguro", SAFE_MIN_PROB=0.9), demo=True, telegram=False)
-    assert "Picks: <b>0</b>" in report
+    assert "<b>0</b> sencillas" in report
 
 
 def test_double_chance_settlement():
@@ -95,7 +94,7 @@ def test_safe_mode_flags_market_value_first():
         report = vba.strip_html(vba.run(cfg(MODE="seguro"), demo=True, telegram=False))
     finally:
         vba.demo_events = orig
-    assert "Seguro + valor" in report
+    assert "⭐ Europa paga" in report
     assert report.index("Inter") < report.index("Arsenal")
 
 
@@ -125,7 +124,7 @@ def test_parlays_one_leg_per_match_and_limits():
         assert len({lg.event_id for lg in par["legs"]}) == len(par["legs"])
         assert all(lg.prob >= c["LEG_MIN_PROB"] for lg in par["legs"])
     report = vba.strip_html(vba.run(c, demo=True, telegram=False))
-    assert "PARLAYS SUGERIDAS" in report and "30% de tu banca" in report and "Notas del analista" in report
+    assert "PARLAYS" in report and "30% de tu banca" in report and "Notas del analista" in report
 
 
 def test_underdog_picks_are_non_favorites_with_good_prob_and_payout():
@@ -149,16 +148,16 @@ def test_underdog_picks_are_non_favorites_with_good_prob_and_payout():
 
 def test_focus_team_section():
     report = vba.strip_html(vba.run(cfg(MODE="seguro"), demo=True, telegram=False))
-    assert "APARTADO MANCHESTER CITY" in report
-    assert "Haaland anota en cualquier momento" in report
-    assert "Gana Manchester City + Haaland anota" in report
+    assert "🩵 MANCHESTER CITY" in report
+    assert "Haaland anota -" in report
+    assert "Gana Man City + Haaland anota" in report
     reviews, c = _demo_reviews()
     city = next(r for r in reviews if r.home == "Manchester City")
     fa = vba.focus_analysis(city, c)
-    probs = {sel: p for _, sel, p, _ in fa["picks"]}
+    probs = {pk[1]: pk[2] for pk in fa["picks"]}
     # coherencia: ganar + anota nunca es más probable que cada parte por separado
-    assert probs["Gana Manchester City + Haaland anota"] < probs["Haaland anota en cualquier momento"]
-    assert probs["Gana Manchester City + Haaland anota"] < probs["Gana Manchester City"]
+    assert probs["Gana Man City + Haaland anota"] < probs["Haaland anota"]
+    assert probs["Gana Man City + Haaland anota"] < probs["Gana Man City"]
     # con momios reales de goleador se mezcla con el mercado
     fa2 = vba.focus_analysis(city, c, props=[(1.50, "Bet365"), (1.55, "Unibet")])
     assert fa2["market"]["best"] == 1.55
@@ -174,4 +173,20 @@ def test_focus_season_share():
 
 def test_focus_section_only_on_match_day():
     report = vba.strip_html(vba.run(cfg(MODE="seguro", HOURS_AHEAD=3), demo=True, telegram=False))
-    assert "APARTADO MANCHESTER CITY" not in report   # el City juega dentro de 11 h, fuera de la ventana
+    assert "🩵 MANCHESTER CITY" not in report   # el City juega dentro de 11 h, fuera de la ventana
+
+
+def test_report_html_is_well_formed_and_split_by_sections():
+    import re
+    report = vba.run(cfg(MODE="seguro", BANKROLL=50), demo=True, telegram=False)
+    for chunk in vba.split_message(report):
+        stack = []
+        for m in re.finditer(r"<(/?)(\w+)[^>]*>", chunk):
+            if m.group(1):
+                assert stack and stack[-1] == m.group(2)
+                stack.pop()
+            else:
+                stack.append(m.group(2))
+        assert not stack
+    small = vba.split_message(report, limit=1200)
+    assert len(small) > 1 and all(c.count("<blockquote") == c.count("</blockquote>") for c in small)

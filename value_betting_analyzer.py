@@ -557,13 +557,27 @@ def send_telegram(text: str, cfg: dict) -> None:
 
 
 def split_message(text: str, limit: int = 4000) -> list[str]:
-    """Telegram admite 4096 caracteres por mensaje: corta por líneas."""
+    """Telegram admite 4096 caracteres por mensaje. Junta secciones completas en cada
+    mensaje; solo si una sección sola no cabe, la corta por líneas."""
+    pieces = []
+    for sec in text.split("\x1e"):
+        if len(sec) <= limit:
+            pieces.append(sec)
+            continue
+        current = ""
+        for line in sec.split("\n"):
+            if len(current) + len(line) + 1 > limit and current:
+                pieces.append(current.rstrip("\n"))
+                current = ""
+            current += line + "\n"
+        if current.strip():
+            pieces.append(current.rstrip("\n"))
     chunks, current = [], ""
-    for line in text.split("\n"):
-        if len(current) + len(line) + 1 > limit and current:
+    for pc in pieces:
+        if current and len(current) + len(pc) + 2 > limit:
             chunks.append(current)
             current = ""
-        current += line + "\n"
+        current = f"{current}\n\n{pc}" if current else pc
     if current.strip():
         chunks.append(current)
     return chunks
@@ -726,7 +740,7 @@ def underdog_picks(reviews: list[MatchReview], cfg: dict) -> list[dict]:
             ("Doble oportunidad", f"{dog} o empate", p_win + pd, dc_price),
             ("Hándicap", f"{dog} +1.5 (no pierde por 2 o más)",
              P(lambda i, j: dog_goals(i, j) - fav_goals(i, j) >= -1) - cut, None),
-            (f"Total goles {dog}", f"{dog} más de 0.5 goles", P(lambda i, j: dog_goals(i, j) >= 1) - cut, None),
+            (f"Total goles {dog}", f"{dog} anota (más de 0.5)", P(lambda i, j: dog_goals(i, j) >= 1) - cut, None),
         ]
         best = None
         for market, sel, prob, price in options:
@@ -743,35 +757,6 @@ def underdog_picks(reviews: list[MatchReview], cfg: dict) -> list[dict]:
             out.append(best[1])
     out.sort(key=lambda c: (c["ev"] is not None and c["ev"] >= 0.02, c["ev"] or 0, c["leg"].min_odds), reverse=True)
     return out[: cfg["DOG_MAX"]]
-
-
-def underdog_lines(reviews: list[MatchReview], cfg: dict) -> list[str]:
-    picks = underdog_picks(reviews, cfg)
-    if not picks:
-        return []
-    e = html.escape
-    cur = e(cfg.get("CURRENCY", "$"))
-    stake = cfg.get("STAKE_AMOUNT") or cfg["PARLAY_STAKE"]
-    lines = ["", "<b>🐺 NO FAVORITOS CON RESPALDO</b>",
-             "El público carga el dinero al favorito y las casas le bajan su pago; aquí el no favorito "
-             "tiene buena probabilidad y paga más."]
-    for c in picks:
-        lg = c["leg"]
-        tag = "" if lg.source == "mercado" else " ·est."
-        lines += ["",
-                  f"• <b>{e(lg.selection)}</b> — mín. {odds_txt(lg.min_odds)} ({lg.prob * 100:.0f}%{tag})",
-                  f"   {e(lg.home)} vs {e(lg.away)} · {lg.kickoff.strftime('%d/%m %H:%M')} · {e(lg.league)} · {e(lg.market)}",
-                  f"   💵 Con {cur}{stake:.0f} ganas ≥ {cur}{stake * (lg.min_odds - 1):.2f}"]
-        if c["market_odds"]:
-            if c["ev"] is not None and c["ev"] >= 0.02:
-                lines.append(f"   ⭐ Casas europeas ya pagan hasta {american(c['market_odds'])}: "
-                             f"valor {pct(c['ev'])} sobre la probabilidad real")
-            else:
-                lines.append(f"   Mejor pago en Europa: {american(c['market_odds'])} (sin valor extra; "
-                             f"busca que {e(cfg['MAIN_BOOK'])} pague más que el mínimo)")
-    lines.append("<i>Pagan más porque fallan más seguido que un favorito: úsalos como sencillas o "
-                 "como 1 selección dentro de una doble, no varios juntos.</i>")
-    return lines
 
 
 def american(decimal_odds: float) -> str:
@@ -880,8 +865,8 @@ def market_legs(review: MatchReview, cfg: dict) -> list[Leg]:
         ("Total de goles", "Menos de 3.5 goles", P(lambda i, j: i + j <= 3) - cut, "modelo"),
         ("Ambos equipos anotan", "Sí", P(lambda i, j: i >= 1 and j >= 1) - cut, "modelo"),
         ("Ambos equipos anotan", "No", P(lambda i, j: i == 0 or j == 0) - cut, "modelo"),
-        (f"Total goles {h}", f"{h} más de 0.5 goles", P(lambda i, j: i >= 1) - cut, "modelo"),
-        (f"Total goles {a}", f"{a} más de 0.5 goles", P(lambda i, j: j >= 1) - cut, "modelo"),
+        (f"Total goles {h}", f"{h} anota (más de 0.5)", P(lambda i, j: i >= 1) - cut, "modelo"),
+        (f"Total goles {a}", f"{a} anota (más de 0.5)", P(lambda i, j: j >= 1) - cut, "modelo"),
         ("Crear apuesta", f"Gana {h} + más de 1.5 goles", P(lambda i, j: i > j and i + j >= 2) - cut, "modelo"),
         ("Crear apuesta", f"Gana {a} + más de 1.5 goles", P(lambda i, j: j > i and i + j >= 2) - cut, "modelo"),
     ]
@@ -916,15 +901,15 @@ def build_parlays(reviews: list[MatchReview], cfg: dict) -> list[dict]:
 
     first = pool[0]
     second = next(lg for lg in pool if lg.event_id != first.event_id)
-    out = [make("🛡️ Doble más segura", [first, second])]
-    for name, target in (("💵 Para doblar tus $ (≥ +100)", 2.0), ("🚀 Estilo de tu ticket (≥ +145)", 2.45)):
+    out = [make("🛡️ Segura", [first, second])]
+    for name, target in (("💵 Dobla tu dinero", 2.0), ("🚀 Estilo ticket", 2.45)):
         cands = [c for c in combos if 1 / prod(lg.prob for lg in c) >= target
                  and prod(lg.prob for lg in c) >= cfg["PARLAY_MIN_PROB"]]
         if not cands:
             continue
         best = min(cands, key=lambda c: (len(c), 1 / prod(lg.prob for lg in c)))
         if all({id(x) for x in best} != {id(x) for x in o["legs"]} for o in out):
-            out.append(make(name.replace("$", cfg.get("CURRENCY", "$") + f"{cfg['PARLAY_STAKE']:.0f}"), best))
+            out.append(make(name, best))
     return out
 
 
@@ -1012,6 +997,7 @@ def focus_analysis(review: MatchReview, cfg: dict, props: list[tuple[float, str]
     ph, pd, pa = review.fair
     p_win = ph if home_side else pa
     player = cfg["FOCUS_PLAYER"].split()[-1]
+    team = short_name(team)
     p_any = P(lambda i, j: scores(tg(i, j))) - cut
     market = None
     if props:
@@ -1020,202 +1006,258 @@ def focus_analysis(review: MatchReview, cfg: dict, props: list[tuple[float, str]
         p_any = 0.5 * p_any + 0.5 * mkt_prob
         market = {"best": best_price, "book": best_book, "n": len(props), "ev": best_price * p_any - 1}
     picks = [
-        ("1X2", f"Gana {team}", p_win, "mercado"),
-        ("Doble oportunidad", f"{team} o empate", p_win + pd, "mercado"),
-        (f"Total goles {team}", f"{team} más de 1.5 goles", P(lambda i, j: tg(i, j) >= 2) - cut, "modelo"),
+        ("1X2", f"Gana {team}", p_win, "mercado", "equipo"),
+        ("Doble oportunidad", f"{team} o empate", p_win + pd, "mercado", "equipo"),
+        (f"Total goles {team}", f"{team} más de 1.5 goles", P(lambda i, j: tg(i, j) >= 2) - cut, "modelo", "equipo"),
         ("Crear apuesta", f"Gana {team} + más de 1.5 goles",
-         P(lambda i, j: tg(i, j) > og(i, j) and i + j >= 2) - cut, "modelo"),
-        ("Portería a cero", f"{team} no recibe gol", P(lambda i, j: og(i, j) == 0) - cut, "modelo"),
-        ("Goleador", f"{player} anota en cualquier momento", p_any, "mercado" if props else "modelo"),
-        ("Goleador", f"{player} anota 2 o más", P(lambda i, j: brace(tg(i, j))) - cut, "modelo"),
+         P(lambda i, j: tg(i, j) > og(i, j) and i + j >= 2) - cut, "modelo", "equipo"),
+        ("Portería a cero", f"{team} no recibe gol", P(lambda i, j: og(i, j) == 0) - cut, "modelo", "equipo"),
+        ("Goleador", f"{player} anota", p_any, "mercado" if props else "modelo", "jugador"),
+        ("Goleador", f"{player} 2 o más goles", P(lambda i, j: brace(tg(i, j))) - cut, "modelo", "jugador"),
         ("Crear apuesta", f"Gana {team} + {player} anota",
-         P(lambda i, j: scores(tg(i, j)) if tg(i, j) > og(i, j) else 0.0) - cut * 1.5, "modelo"),
+         P(lambda i, j: scores(tg(i, j)) if tg(i, j) > og(i, j) else 0.0) - cut * 1.5, "modelo", "jugador"),
     ]
     return {"review": review, "rival": rival, "home": home_side, "xg": (lh, la) if home_side else (la, lh),
             "share": share, "season": season, "market": market,
-            "picks": [(mk, sel, p, src) for mk, sel, p, src in picks if 0 < p < 1]}
+            "picks": [pk for pk in picks if 0 < pk[2] < 1]}
 
 
-def focus_lines(fa: dict | None, cfg: dict) -> list[str]:
+# ---------------------------------------------------------------------------
+# Presentación del informe (HTML de Telegram)
+# ---------------------------------------------------------------------------
+SECTION_BREAK = "\x1e"      # separa secciones: el envío nunca corta una sección a la mitad
+DIV = "━━━━━━━━━━━━━━━"
+DAYS_ES = ["Lun", "Mar", "Mié", "Jue", "Vie", "Sáb", "Dom"]
+MONTHS_ES = ["ene", "feb", "mar", "abr", "may", "jun", "jul", "ago", "sep", "oct", "nov", "dic"]
+SHORT_NAMES = {
+    "Manchester City": "Man City", "Manchester United": "Man United", "Tottenham Hotspur": "Tottenham",
+    "Brighton and Hove Albion": "Brighton", "Wolverhampton Wanderers": "Wolves", "West Ham United": "West Ham",
+    "Newcastle United": "Newcastle", "Nottingham Forest": "Nottm Forest", "Crystal Palace": "Palace",
+    "Borussia Monchengladbach": "Gladbach", "Borussia Dortmund": "Dortmund", "Bayer Leverkusen": "Leverkusen",
+    "Bayern Munich": "Bayern", "Eintracht Frankfurt": "Frankfurt", "Real Racing Club de Santander": "Racing",
+    "Atlético Madrid": "Atlético", "Athletic Bilbao": "Athletic", "Paris Saint Germain": "PSG",
+    "Inter Milan": "Inter",
+}
+_PREFIX = re.compile(r"^(?:1\. FC|FC|CF|CA|AC|AS|SC|SSC|TSG|RC|RCD|CD|UD|SD|VfB|VfL|SV)\s+")
+_SUFFIX = re.compile(r"\s+(?:FC|CF|BC|AFC|SC)$")
+
+
+def short_name(name: str) -> str:
+    if name in SHORT_NAMES:
+        return SHORT_NAMES[name]
+    return _SUFFIX.sub("", _PREFIX.sub("", name)).strip() or name
+
+
+def shortener(names):
+    """Devuelve una función que cambia nombres largos de equipos por cortos en un texto."""
+    pairs = sorted({(n, short_name(n)) for n in names if short_name(n) != n}, key=lambda t: -len(t[0]))
+
+    def apply(text: str) -> str:
+        for full, short in pairs:
+            text = text.replace(full, short)
+        return text
+    return apply
+
+
+def c_odds(decimal_odds: float) -> str:
+    return f"<code>{american(decimal_odds)}</code>"
+
+
+def p_txt(prob: float, estimated: bool) -> str:
+    return f"{'≈' if estimated else ''}{prob * 100:.0f}%"
+
+
+def money(x: float, cfg: dict) -> str:
+    cur = html.escape(cfg.get("CURRENCY", "$"))
+    return f"{cur}{x:.0f}" if abs(x - round(x)) < 1e-9 else f"{cur}{x:.2f}"
+
+
+def date_es(dt: datetime) -> str:
+    return f"{DAYS_ES[dt.weekday()]} {dt.day} {MONTHS_ES[dt.month - 1]}"
+
+
+def match_line(home: str, away: str, kickoff: datetime, league: str | None = None) -> str:
     e = html.escape
-    team, player = cfg["FOCUS_TEAM"], cfg["FOCUS_PLAYER"]
+    extra = f" · {e(league)}" if league else ""
+    return f"<i>{e(short_name(home))} vs {e(short_name(away))} · {kickoff.strftime('%H:%M')}{extra}</i>"
+
+
+def focus_section(fa: dict | None, cfg: dict) -> str | None:
     if not fa:
-        return []
+        return None
+    e = html.escape
     r = fa["review"]
-    cur = e(cfg.get("CURRENCY", "$"))
+    team, player = cfg["FOCUS_TEAM"], cfg["FOCUS_PLAYER"]
+    surname = player.split()[-1]
     stake = cfg.get("STAKE_AMOUNT") or cfg["PARLAY_STAKE"]
     ph, pd, pa = r.fair
     p_team, p_riv = (ph, pa) if fa["home"] else (pa, ph)
-    lines = ["", f"<b>🩵 APARTADO {e(team.upper())} · {e(player.upper())}</b>",
-             f"⚽ Hoy juega: <b>{e(r.home)} vs {e(r.away)}</b> · "
-             f"{r.kickoff.strftime('%d/%m %H:%M')} · {e(r.league)}",
-             f"📊 {e(team)} {p_team * 100:.0f}% · empate {pd * 100:.0f}% · {e(fa['rival'])} {p_riv * 100:.0f}%",
-             f"⚽ Goles esperados: {e(team)} {fa['xg'][0]:.1f} – {fa['xg'][1]:.1f} {e(fa['rival'])}"]
+    t_s, riv_s = short_name(team), short_name(fa["rival"])
+    lines = [DIV, f"🩵 <b>{e(team.upper())}</b> · hoy {r.kickoff.strftime('%H:%M')}",
+             f"<i>vs {e(riv_s)} · {e(r.league)} · {'local' if fa['home'] else 'visitante'}</i>", "",
+             f"📊 {e(t_s)} <b>{p_team * 100:.0f}%</b> · Empate {pd * 100:.0f}% · {e(riv_s)} {p_riv * 100:.0f}%",
+             f"⚽ Goles esperados <b>{fa['xg'][0]:.1f} – {fa['xg'][1]:.1f}</b>"]
     sz = fa["season"]
     if sz:
-        lines.append(f"📈 {e(player)} en Premier: {sz['goals']} goles en {sz['played']} partidos "
-                     f"({sz['penalties']} de penal) · {fa['share'] * 100:.0f}% de los goles del {e(team)}")
+        lines.append(f"👤 {e(surname)}: {sz['goals']} goles en {sz['played']} partidos · "
+                     f"{fa['share'] * 100:.0f}% de los goles del equipo")
     else:
-        lines.append(f"📈 {e(player)} anota ≈{fa['share'] * 100:.0f}% de los goles del {e(team)} (valor de "
-                     "referencia; con la clave de football-data se calcula con la temporada actual)")
-    lines.append("")
-    for mk, sel, p, src in sorted(fa["picks"], key=lambda x: x[2], reverse=True):
+        lines.append(f"👤 {e(surname)}: ≈{fa['share'] * 100:.0f}% de los goles del equipo <i>(referencia)</i>")
+
+    def row(sel, p, src):
         icon = "✅" if p >= 0.60 else "⚠️" if p >= 0.45 else "🎲"
-        tag = "" if src == "mercado" else " ·est."
-        lines.append(f"{icon} <b>{e(sel)}</b> — {p * 100:.0f}%{tag} · mín. {odds_txt(1 / p)} · "
-                     f"con {cur}{stake:.0f} ganas ≥ {cur}{stake * (1 / p - 1):.2f}")
+        return (f"{icon} {e(sel)} {c_odds(1 / p)} · {p_txt(p, src != 'mercado')} · "
+                f"+{money(stake * (1 / p - 1), cfg)}")
+
+    for group, title in (("equipo", "Equipo"), ("jugador", surname)):
+        items = sorted((pk for pk in fa["picks"] if pk[4] == group), key=lambda pk: pk[2], reverse=True)
+        if items:
+            lines += ["", f"<b>{e(title)}</b>"] + [row(sel, p, src) for _, sel, p, src, _ in items]
     mkt = fa["market"]
     if mkt:
-        flag = (f"⭐ valor {pct(mkt['ev'])}" if mkt["ev"] >= 0.02 else "sin valor extra")
-        lines.append(f"🎯 Goleador en casas ({mkt['n']} momios): mejor {american(mkt['best'])} en "
-                     f"{e(mkt['book'])} → {flag}")
-    lines += [
-        f"<i>✅ ≥60% · ⚠️ 45–60% · 🎲 menos de 45%. Confirma que {e(player.split()[-1])} sea titular "
-        "1 h antes; si no juega, olvida sus picks. «Gana + anota» suele pagar más en BetMéxico si "
-        "cumple el mínimo.</i>",
+        flag = f"⭐ valor {pct(mkt['ev'])}" if mkt["ev"] >= 0.02 else "sin valor extra"
+        lines.append(f"🎯 Casas: mejor {c_odds(mkt['best'])} en {e(mkt['book'])} · {flag}")
+    lines.append(f"<i>✅ ≥60% · ⚠️ 45–60% · 🎲 &lt;45% · Confirma que {e(surname)} sea titular.</i>")
+    return "\n".join(lines)
+
+
+def singles_section(picks: list[Pick], cfg: dict) -> str:
+    e = html.escape
+    stake = cfg.get("STAKE_AMOUNT") or 0
+    head = "✅ <b>SENCILLAS</b>" + (f" · {money(stake, cfg)} c/u" if stake else "")
+    lines = [DIV, head]
+    if not picks:
+        lines.append("<i>Hoy ninguna cumple los filtros de seguridad.</i>")
+        return "\n".join(lines)
+    misses = sum(1 - p.fair_prob for p in picks)
+    lines.append(f"<i>De {len(picks)}, lo normal es fallar ~{max(1, round(misses))}.</i>")
+    for i, p in enumerate(picks, 1):
+        label = f"Gana {short_name(p.selection)}" if p.outcome in ("home", "away") else short_name(p.home) + " o empate" \
+            if p.outcome == "home_draw" else short_name(p.away) + " o empate" if p.outcome == "away_draw" else p.selection
+        info = f"{p.fair_prob * 100:.0f}% · ganas {money(p.stake * (p.min_odds - 1), cfg)}"
+        if p.odds and p.odds > p.min_odds:
+            info += f" · ⭐ Europa paga {american(p.odds)}"
+        lines += ["", f"<b>{i}. {e(label)}</b> {c_odds(p.min_odds)}",
+                  match_line(p.home, p.away, p.kickoff, p.league), info]
+    return "\n".join(lines)
+
+
+def parlays_section(reviews: list[MatchReview], cfg: dict) -> str | None:
+    parlays = build_parlays(reviews, cfg)
+    if not parlays:
+        return None
+    e = html.escape
+    S = shortener([n for r in reviews for n in (r.home, r.away)])
+    stake = cfg["PARLAY_STAKE"]
+    lines = [DIV, f"🎰 <b>PARLAYS</b> · {money(stake, cfg)} c/u"]
+    for par in parlays:
+        lines += ["", f"<b>{par['name']}</b> · {par['prob'] * 100:.0f}% · {c_odds(par['odds'])}",
+                  f"{money(stake, cfg)} → cobras <b>{money(stake * par['odds'], cfg)}</b>"]
+        legs = par["legs"]
+        for k, lg in enumerate(legs):
+            last = k == len(legs) - 1
+            lines.append(f"{'└' if last else '├'} {e(S(lg.selection))} {c_odds(lg.min_odds)} · "
+                         f"{p_txt(lg.prob, lg.source != 'mercado')}")
+            lines.append(f"{'   ' if last else '│  '}{match_line(lg.home, lg.away, lg.kickoff)}")
+    bank = cfg.get("BANKROLL") or 0
+    if bank and stake > 0.10 * bank:
+        lines += ["", f"<i>⚠️ {money(stake, cfg)} por parlay es el {stake / bank * 100:.0f}% de tu banca.</i>"]
+    return "\n".join(lines)
+
+
+def underdogs_section(reviews: list[MatchReview], cfg: dict) -> str | None:
+    picks = underdog_picks(reviews, cfg)
+    if not picks:
+        return None
+    e = html.escape
+    S = shortener([n for r in reviews for n in (r.home, r.away)])
+    stake = cfg.get("STAKE_AMOUNT") or cfg["PARLAY_STAKE"]
+    lines = [DIV, "🐺 <b>NO FAVORITOS</b> · pagan más",
+             "<i>El público apuesta al favorito; estos tienen buena probabilidad y mejor pago.</i>"]
+    for c in picks:
+        lg = c["leg"]
+        info = f"{p_txt(lg.prob, lg.source != 'mercado')} · ganas {money(stake * (lg.min_odds - 1), cfg)}"
+        if c["ev"] is not None and c["ev"] >= 0.02:
+            info += f" · ⭐ valor {pct(c['ev'])}"
+        lines += ["", f"<b>{e(S(lg.selection))}</b> {c_odds(lg.min_odds)}",
+                  match_line(lg.home, lg.away, lg.kickoff, lg.league), info]
+    lines += ["", "<i>Úsalos solos o como 1 selección de una doble, no varios juntos.</i>"]
+    return "\n".join(lines)
+
+
+def history_section(stats: dict, cfg: dict) -> str:
+    lines = [DIV, "📒 <b>HISTORIAL</b>"]
+    if stats.get("n"):
+        n = stats["n"]
+        lines += [f"{stats['wins']} de {n} ganadas · <b>{stats['win_rate'] * 100:.0f}%</b> "
+                  f"(esperado {stats['expected_wins'] / n * 100:.0f}%)",
+                  f"ROI <b>{pct(stats['roi'])}</b> · beneficio {'+' if stats['profit'] >= 0 else '−'}"
+                  f"{money(abs(stats['profit']), cfg)}"]
+    else:
+        lines.append("<i>Aún no hay apuestas liquidadas.</i>")
+    return "\n".join(lines)
+
+
+def notes_section(reviews: list[MatchReview], cfg: dict, remaining: str | None) -> str:
+    e = html.escape
+    rest = sorted((r for r in reviews if not r.picks), key=lambda r: r.kickoff)
+    items = [
+        "🧠 <b>Notas del analista</b>",
+        f"• <b>Momio mínimo</b> = probabilidad real sin margen. Si {e(cfg['MAIN_BOOK'])} paga menos, salta el pick.",
+        "• <b>≈</b> = estimado con un modelo de goles calibrado con el mercado (con recorte prudente).",
+        "• Las cuotas ya reflejan lesiones y noticias; aun así revisa alineaciones 1 h antes.",
+        "• Córners y remates a puerta no se incluyen: no hay datos gratuitos confiables.",
     ]
-    return lines
+    if rest:
+        items.append("• Sin pick sencillo: " + ", ".join(
+            f"{r.kickoff.strftime('%H:%M')} {e(short_name(r.home))}–{e(short_name(r.away))}" for r in rest))
+    if remaining is not None:
+        items.append(f"• Créditos de cuotas restantes: {e(str(remaining))}")
+    items.append("+18 · Apuesta solo lo que puedas perder.")
+    return DIV + "\n<blockquote expandable>" + "\n".join(items) + "</blockquote>"
 
 
 def build_report(reviews: list[MatchReview], picks: list[Pick], cfg: dict, stats: dict,
-                 remaining: str | None, today: datetime, focus: list[str] | None = None) -> str:
+                 remaining: str | None, today: datetime, focus: str | None = None) -> str:
     e = html.escape
     if cfg.get("MODE") == "seguro":
         return build_safe_report(reviews, picks, cfg, stats, remaining, today, focus)
-    lines = [f"<b>📊 Value Betting · {today.strftime('%d/%m/%Y')}</b>",
-             f"Partidos revisados: <b>{len(reviews)}</b> · Picks con valor: <b>{len(picks)}</b>", ""]
-    lines += (focus or []) + ([""] if focus else [])
-
+    lines = [f"📊 <b>VALUE BETTING</b> · {date_es(today)}",
+             f"Partidos revisados: <b>{len(reviews)}</b> · Picks con valor: <b>{len(picks)}</b>"]
+    body = [DIV, f"✅ <b>PICKS DE VALOR</b> · EV ≥ {cfg['MIN_EV'] * 100:.1f}%"]
     if picks:
-        lines.append(f"<b>✅ PICKS (EV ≥ {cfg['MIN_EV'] * 100:.1f}%, de mayor a menor)</b>")
         for i, p in enumerate(picks, 1):
-            lines += [
-                "",
-                f"<b>{i}. {e(p.home)} vs {e(p.away)}</b>",
-                f"🏆 {e(p.league)} · 🕒 {p.kickoff.strftime('%d/%m %H:%M')}",
-                f"🎯 <b>{OUTCOME_LABEL[p.outcome]} – {e(p.selection)}</b> @ <b>{odds_txt(p.odds)}</b> ({e(p.bookmaker)})",
-                f"📈 EV {pct(p.ev)} · Prob. justa {p.fair_prob * 100:.1f}% · Momio justo {american(p.fair_odds)}",
-                f"💰 Stake: {p.stake_pct * 100:.1f}% de banca ≈ {p.stake:.2f} · {p.n_books} casas ({p.source})",
-                f"📱 En {e(cfg['MAIN_BOOK'])}: apuesta solo si el momio paga ≥ <b>{odds_txt(p.min_odds)}</b>",
-            ]
+            body += ["", f"<b>{i}. {e(p.selection)}</b> @ {odds_txt(p.odds)} ({e(p.bookmaker)})",
+                     match_line(p.home, p.away, p.kickoff, p.league),
+                     f"EV {pct(p.ev)} · prob. {p.fair_prob * 100:.1f}% · stake {money(p.stake, cfg)}",
+                     f"En {e(cfg['MAIN_BOOK'])}: solo si paga ≥ {c_odds(p.min_odds)}"]
     else:
-        lines.append("❌ Hoy no hay picks con valor suficiente. No apostar también es una decisión ganadora.")
-
-    no_value = [r for r in reviews if not r.picks]
-    if no_value:
-        lines += ["", "<b>🔎 Revisados sin valor</b>"]
-        for r in sorted(no_value, key=lambda r: r.kickoff):
-            tag = f"mejor EV {pct(r.best_ev)}" if r.best_ev is not None else "pocas casas"
-            lines.append(f"• {r.kickoff.strftime('%H:%M')} {e(r.home)} vs {e(r.away)} — {tag}")
-
-    lines += history_lines(stats, remaining)
-    lines += ["", "<i>El valor se mide a largo plazo (cientos de apuestas). Apuesta solo lo que puedas perder. +18</i>"]
-    return "\n".join(lines)
-
-
-def history_lines(stats: dict, remaining: str | None) -> list[str]:
-    e = html.escape
-    lines = ["", "<b>📒 Historial</b>"]
-    if stats.get("n"):
-        lines.append(
-            f"{stats['n']} picks liquidados · Aciertos {stats['win_rate'] * 100:.1f}% "
-            f"(esperado {stats['expected_wins'] / stats['n'] * 100:.1f}%) · ROI {pct(stats['roi'])} · "
-            f"Beneficio {stats['profit']:+.2f}"
-        )
-    else:
-        lines.append("Aún no hay picks liquidados.")
-    if remaining is not None:
-        lines.append(f"<i>Créditos The Odds-API restantes: {e(str(remaining))}</i>")
-    return lines
+        body.append("<i>Hoy no hay picks con valor suficiente.</i>")
+    sections = ["\n".join(lines)] + ([focus] if focus else []) + ["\n".join(body),
+                history_section(stats, cfg), notes_section(reviews, cfg, remaining)]
+    return SECTION_BREAK.join(sections)
 
 
 def build_safe_report(reviews: list[MatchReview], picks: list[Pick], cfg: dict, stats: dict,
-                      remaining: str | None, today: datetime, focus: list[str] | None = None) -> str:
+                      remaining: str | None, today: datetime, focus: str | None = None) -> str:
     e = html.escape
-    book = e(cfg["MAIN_BOOK"])
-    cur = e(cfg.get("CURRENCY", "$"))
-    lines = [f"<b>🛡️ Picks de alta probabilidad · {today.strftime('%d/%m/%Y')}</b>",
-             f"Partidos revisados: <b>{len(reviews)}</b> · Picks: <b>{len(picks)}</b>"]
-    lines += (focus or []) + [""]
-    if picks:
-        expected_misses = sum(1 - p.fair_prob for p in picks)
-        lines += [
-            f"De estos {len(picks)} picks, lo esperable es fallar ≈ <b>{expected_misses:.1f}</b>.",
-            f"Abre {book} y apuesta <b>solo</b> si su momio paga igual o más que el indicado "
-            "(ej. -300 paga más que -400); si paga menos, sáltalo.",
-        ]
-        for i, p in enumerate(picks, 1):
-            ref = f" · Mejor en Europa: {american(p.odds)} ({e(p.bookmaker)})" if p.odds else ""
-            lines += [
-                "",
-                f"<b>{i}. {e(p.home)} vs {e(p.away)}</b>",
-                f"🏆 {e(p.league)} · 🕒 {p.kickoff.strftime('%d/%m %H:%M')}",
-                f"🎯 <b>{OUTCOME_LABEL[p.outcome]} – {e(p.selection)}</b>"
-                + (" (doble oportunidad)" if "_" in p.outcome else ""),
-                f"✅ Probabilidad de acierto: <b>{p.fair_prob * 100:.0f}%</b>",
-                f"📱 En {book}: momio mínimo <b>{odds_txt(p.min_odds)}</b>{ref}",
-                f"💰 Stake sencillo: {cur}{p.stake:.2f} ({p.stake_pct * 100:.0f}% de banca) · "
-                f"si aciertas ganas ≥ {cur}{p.stake * (p.min_odds - 1):.2f}",
-            ]
-            if p.odds and p.odds > p.min_odds:
-                lines.append(f"⭐ <b>Seguro + valor</b>: el mercado ya paga {pct(p.odds / p.min_odds - 1)} "
-                             "por encima de la cuota justa")
-    else:
-        lines.append(f"❌ Hoy no hay sencillas con ≥{cfg['SAFE_MIN_PROB'] * 100:.0f}% de probabilidad "
-                     f"que paguen al menos {cfg['SAFE_MIN_ODDS']:.2f}.")
-    lines += parlay_lines(reviews, cfg)
-    lines += underdog_lines(reviews, cfg)
-
-    rest = [r for r in reviews if not r.picks]
-    if rest:
-        lines += ["", "<b>🔎 Revisados sin pick</b>"]
-        for r in sorted(rest, key=lambda r: r.kickoff):
-            tag = f"máx. {r.best_prob * 100:.0f}% (1X/X2)" if r.best_prob is not None else "pocas casas"
-            lines.append(f"• {r.kickoff.strftime('%H:%M')} {e(r.home)} vs {e(r.away)} — {tag}")
-
-    lines += history_lines(stats, remaining)
-    lines += ["", "<i>Alta probabilidad no es certeza: una derrota a momio -250 borra 2.5 aciertos. "
-              "Apuesta solo lo que puedas perder. +18</i>"]
-    return "\n".join(lines)
-
-
-def parlay_lines(reviews: list[MatchReview], cfg: dict) -> list[str]:
-    e = html.escape
-    cur = e(cfg.get("CURRENCY", "$"))
-    stake = cfg["PARLAY_STAKE"]
-    parlays = build_parlays(reviews, cfg)
-    if not parlays:
-        return []
-    lines = ["", "<b>🎰 PARLAYS SUGERIDAS</b>",
-             f"Cada selección debe cumplir su momio mínimo en {e(cfg['MAIN_BOOK'])}; si una no lo cumple, "
-             "cámbiala o arma una doble."]
-    for par in parlays:
-        payout = stake * par["odds"]
-        lines += ["", f"<b>{par['name']}</b> · {len(par['legs'])} selecciones"]
-        for lg in par["legs"]:
-            tag = "" if lg.source == "mercado" else " ·est."
-            lines.append(f"• <b>{e(lg.selection)}</b> — mín. {american(lg.min_odds)} ({lg.prob * 100:.0f}%{tag})\n"
-                         f"   {e(lg.home)} vs {e(lg.away)} · {lg.kickoff.strftime('%H:%M')} · {e(lg.market)}")
-        lines += [
-            f"✅ Probabilidad de que salga completa: <b>{par['prob'] * 100:.0f}%</b> "
-            f"(falla ≈ {round((1 - par['prob']) * 10)} de cada 10)",
-            f"📱 Momio total mínimo: <b>{odds_txt(par['odds'])}</b>",
-            f"💵 Con {cur}{stake:.0f} cobras ≥ {cur}{payout:.2f} (ganancia ≥ {cur}{payout - stake:.2f})",
-        ]
-    bank = cfg.get("BANKROLL") or 0
-    if bank and stake > 0.10 * bank:
-        lines += ["", f"⚠️ {cur}{stake:.0f} por parlay es el {stake / bank * 100:.0f}% de tu banca. "
-                  f"Dos parlays perdidas seguidas te quitan {min(2 * stake / bank, 1) * 100:.0f}%."]
-    lines += [
+    n_par = len(build_parlays(reviews, cfg))
+    n_dog = len(underdog_picks(reviews, cfg))
+    stake = cfg.get("STAKE_AMOUNT") or cfg["PARLAY_STAKE"]
+    header = "\n".join([
+        "📊 <b>APUESTAS DEL DÍA</b>",
+        f"<i>{date_es(today)} · {e(cfg['MAIN_BOOK'])} · {money(stake, cfg)} por apuesta</i>",
         "",
-        "<b>🧠 Notas del analista</b>",
-        "• Las cuotas de Pinnacle ya incluyen lesiones, rotaciones y noticias. Aun así, revisa la "
-        "alineación confirmada 1 h antes: si falta un titular clave del favorito, quita esa selección.",
-        "• «est.» = estimado con un modelo de goles calibrado con el mercado (ya con recorte prudente).",
-        "• Córners y remates a puerta no se incluyen: no hay datos gratuitos confiables y no invento números.",
-        "• Más selecciones = más margen de la casa. Preferimos 2–3 selecciones fuertes.",
-    ]
-    return lines
+        f"🔎 {len(reviews)} partidos revisados",
+        f"✅ <b>{len(picks)}</b> sencillas · 🎰 <b>{n_par}</b> parlays · 🐺 <b>{n_dog}</b> no favoritos",
+        "",
+        f"📱 Apuesta solo si {e(cfg['MAIN_BOOK'])} paga <b>igual o más</b> que el momio indicado.",
+        "Ej.: <code>-300</code> paga más que <code>-400</code>.",
+    ])
+    sections = [header, focus, singles_section(picks, cfg), parlays_section(reviews, cfg),
+                underdogs_section(reviews, cfg), history_section(stats, cfg),
+                notes_section(reviews, cfg, remaining)]
+    return SECTION_BREAK.join(sc for sc in sections if sc)
 
 
 # ---------------------------------------------------------------------------
@@ -1334,7 +1376,7 @@ def run(cfg: dict, demo: bool = False, telegram: bool = True) -> str:
                     print(f"⚠️  No se pudieron descargar momios de goleador: {exc}")
             season = None if demo else fetch_player_season(cfg)
             fa = focus_analysis(fr, cfg, props, season)
-            focus = focus_lines(fa, cfg)  # solo el día en que juega el equipo
+            focus = focus_section(fa, cfg)  # solo el día en que juega el equipo
 
     report = build_report(reviews, picks, cfg, stats, remaining, now.astimezone(tz), focus)
 
@@ -1345,7 +1387,7 @@ def run(cfg: dict, demo: bool = False, telegram: bool = True) -> str:
 
 
 def strip_html(text: str) -> str:
-    return html.unescape(re.sub(r"<[^>]+>", "", text))
+    return html.unescape(re.sub(r"<[^>]+>", "", text.replace(SECTION_BREAK, "\n\n")))
 
 
 def main() -> None:
