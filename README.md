@@ -28,7 +28,7 @@ The Odds-API no tiene cuotas de casas mexicanas (BetMéxico, Caliente, Codere MX
   - Objetivos: 🛡️ *doble más segura*, 💵 *doblar tu dinero (≥ +100)* y 🚀 *estilo ticket (≥ +145)*. Para cada objetivo elige la combinación con **menos selecciones**, porque cada selección extra suma margen de la casa.
   - Córners y remates a puerta **no** se incluyen: no hay datos gratuitos confiables.
 - Te dice la **probabilidad real de que salga completa**, el momio total mínimo y cuánto cobras con tu apuesta (`PARLAY_STAKE`, por defecto $5).
-- Consume 2 créditos por liga (ganador + goles): ~14 al día con 7 ligas, ~420 al mes.
+- Consume 2 créditos por liga **solo si esa liga juega en las próximas 24 h** (antes lo comprueba con una consulta gratuita). Un día normal gasta 4–10 créditos.
 - Cada selección tiene que cumplir su momio mínimo en BetMéxico; si no, el margen de la casa se multiplica en la parlay.
 
 ### 🐺 No favoritos con respaldo
@@ -63,7 +63,7 @@ Sale **arriba de todo**, pero **solo el día en que juega el City** (partidos de
 2. **Probabilidad real** = 70 % Pinnacle (la casa más precisa) + 30 % mediana del resto (mínimo 4 casas).
 3. **Modo seguro**: por partido elige la opción más probable entre 1, 2, 1X y X2 que pague al menos 1.20 y tenga ≥65 %. Cuota mínima = 1 ÷ probabilidad.
 4. **Modo valor**: `EV = probabilidad × mejor cuota − 1`; pick si EV ≥ 2 %. Stake con Kelly al 25 %.
-5. Guarda cada pick, lo liquida con el resultado y reporta aciertos reales vs. esperados, ROI y beneficio.
+5. Guarda **todas** las sugerencias (sencillas, parlays, no favoritos y picks ✅ del City), las liquida con el marcador final y el historial muestra aciertos reales vs. esperados y ROI **por tipo de apuesta**, para saber qué sección te da dinero. Los picks de goleador (Haaland) no se liquidan porque el marcador no dice quién anotó.
 
 ## Archivos
 

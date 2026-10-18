@@ -244,6 +244,7 @@ class MatchReview:
     fair: list[float] | None = None     # prob. justa [local, empate, visitante]
     p_over25: float | None = None       # prob. justa de más de 2.5 goles
     best_prices: dict | None = None     # mejor cuota europea por resultado: {"home": (cuota, casa), ...}
+    sport_key: str = ""
 
 
 # ---------------------------------------------------------------------------
@@ -340,6 +341,7 @@ def analyze_event(event: dict, league: str, cfg: dict, tz) -> MatchReview:
         source = "consenso"
 
     review.event_id, review.fair = event["id"], fair
+    review.sport_key = event.get("sport_key", "")
     review.best_prices = {}
     for o in order:
         cands = [(p[o], titles[k]) for k, p in all_prices.items() if k != sharp]
@@ -468,6 +470,25 @@ def odds_key_diagnosis(key: str, response) -> str:
                         + " (solo lleva números y letras a-f en minúscula; ¿una O en vez de cero?)")
     hint = "; ".join(problems) if problems else "el formato es correcto; revisa que sea la clave del último correo"
     return f"{hint}. Respuesta de la API: {api_msg or response.status_code}"
+
+
+def has_events(sport_key: str, cfg: dict, start: datetime, end: datetime) -> bool:
+    """Consulta GRATIS (0 créditos): ¿hay partidos de esta liga en la ventana?"""
+    try:
+        r = _requests().get(
+            f"{ODDS_API_URL}/sports/{sport_key}/events",
+            params={"apiKey": cfg["ODDS_API_KEY"], "dateFormat": "iso",
+                    "commenceTimeFrom": start.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                    "commenceTimeTo": end.strftime("%Y-%m-%dT%H:%M:%SZ")},
+            timeout=30,
+        )
+        if r.status_code == 404:
+            return False
+        if not r.ok:
+            return True  # ante la duda, consulta los momios
+        return len(r.json()) > 0
+    except Exception:
+        return True
 
 
 def fetch_scores_odds_api(sport_key: str, cfg: dict) -> list[dict]:
@@ -641,22 +662,43 @@ def _same_team(a: str, b: str) -> bool:
     return difflib.SequenceMatcher(None, na, nb).ratio() >= 0.75
 
 
+def find_result(item: dict, results: list[dict]) -> dict | None:
+    """Busca el marcador final de un partido (por id o por equipos y fecha)."""
+    kickoff_date = item["kickoff"][:10]
+    for res in results:
+        if res.get("id") and res["id"] == item["event_id"]:
+            match = res
+            break
+        if abs((datetime.fromisoformat(res["date"]) - datetime.fromisoformat(kickoff_date)).days) <= 1 \
+                and _same_team(res["home"], item["home"]) and _same_team(res["away"], item["away"]):
+            match = res
+            break
+    else:
+        return None
+    if match["home_goals"] is None or match["away_goals"] is None:
+        return None
+    return match
+
+
+def leg_wins(code: str, hg: int, ag: int) -> bool | None:
+    """¿Gana la selección con este marcador? None si no se puede saber con el marcador."""
+    side, _, rest = code.partition("_")
+    if side in ("home", "away"):
+        tg, og = (hg, ag) if side == "home" else (ag, hg)
+        return {"win": tg > og, "dc": tg >= og, "scores": tg >= 1, "win_over_1.5": tg > og and hg + ag >= 2,
+                "plus_1.5": tg - og >= -1, "cs": og == 0, "team_over_1.5": tg >= 2}.get(rest)
+    total = hg + ag
+    return {"over_1.5": total >= 2, "under_3.5": total <= 3, "over_2.5": total >= 3, "under_2.5": total <= 2,
+            "btts_yes": hg >= 1 and ag >= 1, "btts_no": hg == 0 or ag == 0}.get(code)
+
+
 def settle_rows(rows: list[dict], results: list[dict]) -> int:
     settled = 0
     for r in rows:
         if r["status"] != "pendiente":
             continue
-        kickoff_date = r["kickoff"][:10]
-        match = None
-        for res in results:
-            if res.get("id") and res["id"] == r["event_id"]:
-                match = res
-                break
-            if abs((datetime.fromisoformat(res["date"]) - datetime.fromisoformat(kickoff_date)).days) <= 1 \
-                    and _same_team(res["home"], r["home"]) and _same_team(res["away"], r["away"]):
-                match = res
-                break
-        if not match or match["home_goals"] is None or match["away_goals"] is None:
+        match = find_result(r, results)
+        if not match:
             continue
         hg, ag = match["home_goals"], match["away_goals"]
         winner = "home" if hg > ag else "away" if ag > hg else "draw"
@@ -668,11 +710,106 @@ def settle_rows(rows: list[dict], results: list[dict]) -> int:
     return settled
 
 
+# Historial de parlays, no favoritos y City (una fila por apuesta, selecciones en JSON)
+BETS_FIELDS = ["date", "kind", "name", "bet_id", "legs", "prob", "odds", "stake", "status", "profit"]
+BET_KINDS = {"sencilla": "Sencillas", "parlay": "Parlays", "nofav": "No favoritos", "city": "City"}
+
+
+def bets_file(cfg: dict) -> str:
+    return str(Path(cfg["HISTORY_FILE"]).parent / "bets_history.csv")
+
+
+def read_bets(path: str) -> list[dict]:
+    if not Path(path).exists():
+        return []
+    with open(path, newline="", encoding="utf-8") as f:
+        return list(csv.DictReader(f))
+
+
+def write_bets(path: str, rows: list[dict]) -> None:
+    Path(path).parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "w", newline="", encoding="utf-8") as f:
+        w = csv.DictWriter(f, fieldnames=BETS_FIELDS, extrasaction="ignore")
+        w.writeheader()
+        w.writerows(rows)
+
+
+def record_bets(bets: list[dict], path: str) -> int:
+    """Guarda apuestas sugeridas (sin repetir) para medir después qué sección funciona."""
+    rows = read_bets(path)
+    seen = {r["bet_id"] for r in rows}
+    added = 0
+    for b in bets:
+        legs = [lg for lg in b["legs"] if lg.code and lg.code != "player"]
+        if len(legs) != len(b["legs"]) or not legs:
+            continue  # sin forma de liquidar con el marcador
+        bet_id = b["kind"] + ":" + "|".join(sorted(f"{lg.event_id}/{lg.code}" for lg in legs))
+        if bet_id in seen:
+            continue
+        rows.append({
+            "date": datetime.now(timezone.utc).strftime("%Y-%m-%d"), "kind": b["kind"], "name": b.get("name", ""),
+            "bet_id": bet_id, "prob": f"{b['prob']:.4f}", "odds": f"{b['odds']:.3f}", "stake": f"{b['stake']:.2f}",
+            "status": "pendiente", "profit": "",
+            "legs": json.dumps([{"event_id": lg.event_id, "sport_key": lg.sport_key, "home": lg.home,
+                                 "away": lg.away, "kickoff": lg.kickoff.isoformat(), "code": lg.code,
+                                 "sel": lg.selection, "result": ""} for lg in legs], ensure_ascii=False),
+        })
+        seen.add(bet_id)
+        added += 1
+    write_bets(path, rows)
+    return added
+
+
+def settle_bets(rows: list[dict], results: list[dict]) -> int:
+    settled = 0
+    for r in rows:
+        if r["status"] != "pendiente":
+            continue
+        legs = json.loads(r["legs"])
+        for lg in legs:
+            if lg["result"]:
+                continue
+            match = find_result(lg, results)
+            if match:
+                won = leg_wins(lg["code"], match["home_goals"], match["away_goals"])
+                if won is not None:
+                    lg["result"] = "G" if won else "P"
+        r["legs"] = json.dumps(legs, ensure_ascii=False)
+        stake = float(r["stake"] or 0) or 1.0
+        if any(lg["result"] == "P" for lg in legs):
+            r["status"], r["profit"] = "perdida", f"{-stake:.2f}"
+            settled += 1
+        elif all(lg["result"] == "G" for lg in legs):
+            r["status"], r["profit"] = "ganada", f"{stake * (float(r['odds']) - 1):.2f}"
+            settled += 1
+    return settled
+
+
+def bets_stats(path: str) -> dict:
+    out = {}
+    for r in read_bets(path):
+        if r["status"] not in ("ganada", "perdida"):
+            continue
+        k = out.setdefault(r["kind"], {"n": 0, "wins": 0, "exp": 0.0, "staked": 0.0, "profit": 0.0})
+        k["n"] += 1
+        k["wins"] += r["status"] == "ganada"
+        k["exp"] += float(r["prob"])
+        k["staked"] += float(r["stake"] or 0)
+        k["profit"] += float(r["profit"] or 0)
+    return out
+
+
 def settle_pending(cfg: dict) -> int:
     rows = read_history(cfg["HISTORY_FILE"])
+    bet_rows = read_bets(bets_file(cfg))
     now = datetime.now(timezone.utc)
-    pending = [r for r in rows if r["status"] == "pendiente"
-               and datetime.fromisoformat(r["kickoff"]) + timedelta(hours=2, minutes=30) < now]
+
+    def finished(kickoff: str) -> bool:
+        return datetime.fromisoformat(kickoff) + timedelta(hours=2, minutes=30) < now
+
+    pending = [r for r in rows if r["status"] == "pendiente" and finished(r["kickoff"])]
+    pending += [lg for r in bet_rows if r["status"] == "pendiente" for lg in json.loads(r["legs"])
+                if not lg["result"] and finished(lg["kickoff"])]
     if not pending:
         return 0
     results: list[dict] = []
@@ -691,7 +828,10 @@ def settle_pending(cfg: dict) -> int:
     n = settle_rows(rows, results)
     if n:
         write_history(cfg["HISTORY_FILE"], rows)
-    return n
+    nb = settle_bets(bet_rows, results)
+    if bet_rows:
+        write_bets(bets_file(cfg), bet_rows)
+    return n + nb
 
 
 def history_stats(path: str) -> dict:
@@ -736,19 +876,20 @@ def underdog_picks(reviews: list[MatchReview], cfg: dict) -> list[dict]:
         if dog_side in bp and "draw" in bp:  # doble oportunidad equivalente con las mejores cuotas
             dc_price = 1 / (1 / bp[dog_side][0] + 1 / bp["draw"][0])
         options = [
-            ("1X2", f"Gana {dog}", p_win, bp.get(dog_side, (None,))[0]),
-            ("Doble oportunidad", f"{dog} o empate", p_win + pd, dc_price),
+            ("1X2", f"Gana {dog}", p_win, bp.get(dog_side, (None,))[0], f"{dog_side}_win"),
+            ("Doble oportunidad", f"{dog} o empate", p_win + pd, dc_price, f"{dog_side}_dc"),
             ("Hándicap", f"{dog} +1.5 (no pierde por 2 o más)",
-             P(lambda i, j: dog_goals(i, j) - fav_goals(i, j) >= -1) - cut, None),
-            (f"Total goles {dog}", f"{dog} anota (más de 0.5)", P(lambda i, j: dog_goals(i, j) >= 1) - cut, None),
+             P(lambda i, j: dog_goals(i, j) - fav_goals(i, j) >= -1) - cut, None, f"{dog_side}_plus_1.5"),
+            (f"Total goles {dog}", f"{dog} anota (más de 0.5)", P(lambda i, j: dog_goals(i, j) >= 1) - cut, None,
+             f"{dog_side}_scores"),
         ]
         best = None
-        for market, sel, prob, price in options:
+        for market, sel, prob, price, code in options:
             if not (0 < prob < 1) or prob < cfg["DOG_MIN_PROB"] or 1 / prob < cfg["DOG_MIN_ODDS"]:
                 continue
             ev = price * prob - 1 if price else None
             leg = Leg(r.event_id, r.league, r.kickoff, r.home, r.away, market, sel, prob,
-                      "mercado" if market in ("1X2", "Doble oportunidad") else "modelo")
+                      "mercado" if market in ("1X2", "Doble oportunidad") else "modelo", code, r.sport_key)
             cand = {"leg": leg, "market_odds": price, "ev": ev}
             key = (ev is not None and ev >= 0.02, ev or 0, 1 / prob)
             if best is None or key > best[0]:
@@ -787,6 +928,8 @@ class Leg:
     selection: str
     prob: float
     source: str        # "mercado" (cuotas directas) o "modelo" (estimado de goles)
+    code: str = ""     # condición para liquidar con el marcador (ver leg_wins)
+    sport_key: str = ""
 
     @property
     def min_odds(self) -> float:
@@ -857,24 +1000,26 @@ def market_legs(review: MatchReview, cfg: dict) -> list[Leg]:
     cut = 0.02 if po is not None else 0.04
     h, a = review.home, review.away
     raw = [
-        ("1X2", f"Gana {h}", ph, "mercado"),
-        ("1X2", f"Gana {a}", pa, "mercado"),
-        ("Doble oportunidad", f"{h} o empate", ph + pd, "mercado"),
-        ("Doble oportunidad", f"{a} o empate", pa + pd, "mercado"),
-        ("Total de goles", "Más de 1.5 goles", P(lambda i, j: i + j >= 2) - cut, "modelo"),
-        ("Total de goles", "Menos de 3.5 goles", P(lambda i, j: i + j <= 3) - cut, "modelo"),
-        ("Ambos equipos anotan", "Sí", P(lambda i, j: i >= 1 and j >= 1) - cut, "modelo"),
-        ("Ambos equipos anotan", "No", P(lambda i, j: i == 0 or j == 0) - cut, "modelo"),
-        (f"Total goles {h}", f"{h} anota (más de 0.5)", P(lambda i, j: i >= 1) - cut, "modelo"),
-        (f"Total goles {a}", f"{a} anota (más de 0.5)", P(lambda i, j: j >= 1) - cut, "modelo"),
-        ("Crear apuesta", f"Gana {h} + más de 1.5 goles", P(lambda i, j: i > j and i + j >= 2) - cut, "modelo"),
-        ("Crear apuesta", f"Gana {a} + más de 1.5 goles", P(lambda i, j: j > i and i + j >= 2) - cut, "modelo"),
+        ("1X2", f"Gana {h}", ph, "mercado", "home_win"),
+        ("1X2", f"Gana {a}", pa, "mercado", "away_win"),
+        ("Doble oportunidad", f"{h} o empate", ph + pd, "mercado", "home_dc"),
+        ("Doble oportunidad", f"{a} o empate", pa + pd, "mercado", "away_dc"),
+        ("Total de goles", "Más de 1.5 goles", P(lambda i, j: i + j >= 2) - cut, "modelo", "over_1.5"),
+        ("Total de goles", "Menos de 3.5 goles", P(lambda i, j: i + j <= 3) - cut, "modelo", "under_3.5"),
+        ("Ambos equipos anotan", "Sí", P(lambda i, j: i >= 1 and j >= 1) - cut, "modelo", "btts_yes"),
+        ("Ambos equipos anotan", "No", P(lambda i, j: i == 0 or j == 0) - cut, "modelo", "btts_no"),
+        (f"Total goles {h}", f"{h} anota (más de 0.5)", P(lambda i, j: i >= 1) - cut, "modelo", "home_scores"),
+        (f"Total goles {a}", f"{a} anota (más de 0.5)", P(lambda i, j: j >= 1) - cut, "modelo", "away_scores"),
+        ("Crear apuesta", f"Gana {h} + más de 1.5 goles", P(lambda i, j: i > j and i + j >= 2) - cut, "modelo",
+         "home_win_over_1.5"),
+        ("Crear apuesta", f"Gana {a} + más de 1.5 goles", P(lambda i, j: j > i and i + j >= 2) - cut, "modelo",
+         "away_win_over_1.5"),
     ]
     if po is not None:
-        raw += [("Total de goles", "Más de 2.5 goles", po, "mercado"),
-                ("Total de goles", "Menos de 2.5 goles", 1 - po, "mercado")]
-    return [Leg(review.event_id, review.league, review.kickoff, h, a, mk, sel, p, src)
-            for mk, sel, p, src in raw if 0 < p < 1]
+        raw += [("Total de goles", "Más de 2.5 goles", po, "mercado", "over_2.5"),
+                ("Total de goles", "Menos de 2.5 goles", 1 - po, "mercado", "under_2.5")]
+    return [Leg(review.event_id, review.league, review.kickoff, h, a, mk, sel, p, src, code, review.sport_key)
+            for mk, sel, p, src, code in raw if 0 < p < 1]
 
 
 def valid_legs(review: MatchReview, cfg: dict) -> list[Leg]:
@@ -1005,17 +1150,20 @@ def focus_analysis(review: MatchReview, cfg: dict, props: list[tuple[float, str]
         mkt_prob = statistics.median(1 / p for p, _ in props) * 0.93  # quita el margen típico del mercado
         p_any = 0.5 * p_any + 0.5 * mkt_prob
         market = {"best": best_price, "book": best_book, "n": len(props), "ev": best_price * p_any - 1}
+    sd = "home" if home_side else "away"
     picks = [
-        ("1X2", f"Gana {team}", p_win, "mercado", "equipo"),
-        ("Doble oportunidad", f"{team} o empate", p_win + pd, "mercado", "equipo"),
-        (f"Total goles {team}", f"{team} más de 1.5 goles", P(lambda i, j: tg(i, j) >= 2) - cut, "modelo", "equipo"),
+        ("1X2", f"Gana {team}", p_win, "mercado", "equipo", f"{sd}_win"),
+        ("Doble oportunidad", f"{team} o empate", p_win + pd, "mercado", "equipo", f"{sd}_dc"),
+        (f"Total goles {team}", f"{team} más de 1.5 goles", P(lambda i, j: tg(i, j) >= 2) - cut, "modelo", "equipo",
+         f"{sd}_team_over_1.5"),
         ("Crear apuesta", f"Gana {team} + más de 1.5 goles",
-         P(lambda i, j: tg(i, j) > og(i, j) and i + j >= 2) - cut, "modelo", "equipo"),
-        ("Portería a cero", f"{team} no recibe gol", P(lambda i, j: og(i, j) == 0) - cut, "modelo", "equipo"),
-        ("Goleador", f"{player} anota", p_any, "mercado" if props else "modelo", "jugador"),
-        ("Goleador", f"{player} 2 o más goles", P(lambda i, j: brace(tg(i, j))) - cut, "modelo", "jugador"),
+         P(lambda i, j: tg(i, j) > og(i, j) and i + j >= 2) - cut, "modelo", "equipo", f"{sd}_win_over_1.5"),
+        ("Portería a cero", f"{team} no recibe gol", P(lambda i, j: og(i, j) == 0) - cut, "modelo", "equipo",
+         f"{sd}_cs"),
+        ("Goleador", f"{player} anota", p_any, "mercado" if props else "modelo", "jugador", "player"),
+        ("Goleador", f"{player} 2 o más goles", P(lambda i, j: brace(tg(i, j))) - cut, "modelo", "jugador", "player"),
         ("Crear apuesta", f"Gana {team} + {player} anota",
-         P(lambda i, j: scores(tg(i, j)) if tg(i, j) > og(i, j) else 0.0) - cut * 1.5, "modelo", "jugador"),
+         P(lambda i, j: scores(tg(i, j)) if tg(i, j) > og(i, j) else 0.0) - cut * 1.5, "modelo", "jugador", "player"),
     ]
     return {"review": review, "rival": rival, "home": home_side, "xg": (lh, la) if home_side else (la, lh),
             "share": share, "season": season, "market": market,
@@ -1112,7 +1260,7 @@ def focus_section(fa: dict | None, cfg: dict) -> str | None:
     for group, title in (("equipo", "Equipo"), ("jugador", surname)):
         items = sorted((pk for pk in fa["picks"] if pk[4] == group), key=lambda pk: pk[2], reverse=True)
         if items:
-            lines += ["", f"<b>{e(title)}</b>"] + [row(sel, p, src) for _, sel, p, src, _ in items]
+            lines += ["", f"<b>{e(title)}</b>"] + [row(pk[1], pk[2], pk[3]) for pk in items]
     mkt = fa["market"]
     if mkt:
         flag = f"⭐ valor {pct(mkt['ev'])}" if mkt["ev"] >= 0.02 else "sin valor extra"
@@ -1185,16 +1333,27 @@ def underdogs_section(reviews: list[MatchReview], cfg: dict) -> str | None:
     return "\n".join(lines)
 
 
-def history_section(stats: dict, cfg: dict) -> str:
-    lines = [DIV, "📒 <b>HISTORIAL</b>"]
+def history_section(stats: dict, cfg: dict, bstats: dict | None = None) -> str:
+    """Resultados reales por tipo de apuesta (a momio mínimo: estimación conservadora)."""
+    kinds = dict(bstats or {})
     if stats.get("n"):
-        n = stats["n"]
-        lines += [f"{stats['wins']} de {n} ganadas · <b>{stats['win_rate'] * 100:.0f}%</b> "
-                  f"(esperado {stats['expected_wins'] / n * 100:.0f}%)",
-                  f"ROI <b>{pct(stats['roi'])}</b> · beneficio {'+' if stats['profit'] >= 0 else '−'}"
-                  f"{money(abs(stats['profit']), cfg)}"]
-    else:
+        kinds = {"sencilla": {"n": stats["n"], "wins": stats["wins"], "exp": stats["expected_wins"],
+                              "staked": stats["staked"], "profit": stats["profit"]}, **kinds}
+    lines = [DIV, "📒 <b>HISTORIAL</b>"]
+    if not kinds:
         lines.append("<i>Aún no hay apuestas liquidadas.</i>")
+        return "\n".join(lines)
+    tot_s = tot_p = 0.0
+    for key in BET_KINDS:
+        k = kinds.get(key)
+        if not k:
+            continue
+        roi = k["profit"] / k["staked"] if k["staked"] else 0.0
+        tot_s, tot_p = tot_s + k["staked"], tot_p + k["profit"]
+        lines.append(f"{'🟢' if roi >= 0 else '🔴'} <b>{BET_KINDS[key]}</b> · {k['wins']}/{k['n']} "
+                     f"({k['wins'] / k['n'] * 100:.0f}%, esp. {k['exp'] / k['n'] * 100:.0f}%) · ROI {pct(roi)}")
+    lines.append(f"Total: {'+' if tot_p >= 0 else '−'}{money(abs(tot_p), cfg)} sobre {money(tot_s, cfg)} apostados")
+    lines.append("<i>Calculado a momio mínimo; si cobraste más en BetMéxico, ganaste más.</i>")
     return "\n".join(lines)
 
 
@@ -1234,7 +1393,7 @@ def build_report(reviews: list[MatchReview], picks: list[Pick], cfg: dict, stats
     else:
         body.append("<i>Hoy no hay picks con valor suficiente.</i>")
     sections = ["\n".join(lines)] + ([focus] if focus else []) + ["\n".join(body),
-                history_section(stats, cfg), notes_section(reviews, cfg, remaining)]
+                history_section(stats, cfg, cfg.get("_bstats")), notes_section(reviews, cfg, remaining)]
     return SECTION_BREAK.join(sections)
 
 
@@ -1255,7 +1414,7 @@ def build_safe_report(reviews: list[MatchReview], picks: list[Pick], cfg: dict, 
         "Ej.: <code>-300</code> paga más que <code>-400</code>.",
     ])
     sections = [header, focus, singles_section(picks, cfg), parlays_section(reviews, cfg),
-                underdogs_section(reviews, cfg), history_section(stats, cfg),
+                underdogs_section(reviews, cfg), history_section(stats, cfg, cfg.get("_bstats")),
                 notes_section(reviews, cfg, remaining)]
     return SECTION_BREAK.join(sc for sc in sections if sc)
 
@@ -1329,6 +1488,9 @@ def run(cfg: dict, demo: bool = False, telegram: bool = True) -> str:
         if demo:
             events = data.get(sport_key, [])
         else:
+            if not has_events(sport_key, cfg, now, horizon):
+                print(f"·  {league}: sin partidos en la ventana (0 créditos)")
+                continue
             try:
                 events, remaining = fetch_odds(sport_key, cfg)
             except RuntimeError:
@@ -1361,6 +1523,11 @@ def run(cfg: dict, demo: bool = False, telegram: bool = True) -> str:
     if not demo:
         record_picks(picks, cfg["HISTORY_FILE"])
     stats = history_stats(cfg["HISTORY_FILE"]) if not demo else {"n": 0}
+    unit = cfg.get("STAKE_AMOUNT") or cfg["PARLAY_STAKE"]
+    bets = [{"kind": "parlay", "name": par["name"], "legs": par["legs"], "prob": par["prob"],
+             "odds": par["odds"], "stake": cfg["PARLAY_STAKE"]} for par in build_parlays(reviews, cfg)]
+    bets += [{"kind": "nofav", "legs": [c["leg"]], "prob": c["leg"].prob, "odds": c["leg"].min_odds,
+              "stake": unit} for c in underdog_picks(reviews, cfg)]
 
     focus = None
     if cfg.get("FOCUS_TEAM"):
@@ -1377,6 +1544,16 @@ def run(cfg: dict, demo: bool = False, telegram: bool = True) -> str:
             season = None if demo else fetch_player_season(cfg)
             fa = focus_analysis(fr, cfg, props, season)
             focus = focus_section(fa, cfg)  # solo el día en que juega el equipo
+            if fa:  # registra los picks ✅ del equipo para medir el apartado
+                for mk, sel, p, src, group, code in fa["picks"]:
+                    if group == "equipo" and p >= 0.60:
+                        lg = Leg(fr.event_id, fr.league, fr.kickoff, fr.home, fr.away, mk, sel, p, src, code,
+                                 fr.sport_key)
+                        bets.append({"kind": "city", "legs": [lg], "prob": p, "odds": 1 / p, "stake": unit})
+
+    if not demo:
+        record_bets(bets, bets_file(cfg))
+    cfg = {**cfg, "_bstats": {} if demo else bets_stats(bets_file(cfg))}
 
     report = build_report(reviews, picks, cfg, stats, remaining, now.astimezone(tz), focus)
 

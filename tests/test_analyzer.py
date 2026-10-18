@@ -190,3 +190,51 @@ def test_report_html_is_well_formed_and_split_by_sections():
         assert not stack
     small = vba.split_message(report, limit=1200)
     assert len(small) > 1 and all(c.count("<blockquote") == c.count("</blockquote>") for c in small)
+
+
+def test_leg_wins_codes():
+    assert vba.leg_wins("home_dc", 1, 1) and not vba.leg_wins("away_win", 1, 1)
+    assert vba.leg_wins("away_plus_1.5", 2, 1) and not vba.leg_wins("away_plus_1.5", 3, 1)
+    assert vba.leg_wins("over_1.5", 1, 1) and vba.leg_wins("under_3.5", 2, 1)
+    assert vba.leg_wins("btts_no", 2, 0) and vba.leg_wins("home_win_over_1.5", 2, 0)
+    assert vba.leg_wins("player", 1, 0) is None
+
+
+def test_bets_recorded_and_settled_end_to_end(tmp_path, monkeypatch):
+    c = vba.load_config()
+    c.update(MODE="seguro", ODDS_API_KEY="x", FOOTBALL_DATA_KEY="", HISTORY_FILE=str(tmp_path / "h.csv"),
+             BANKROLL=50)
+    data = vba.demo_events()
+    monkeypatch.setattr(vba, "fetch_odds", lambda sk, cf: (data.get(sk, []), "400"))
+    monkeypatch.setattr(vba, "has_events", lambda *a: True)
+    monkeypatch.setattr(vba, "fetch_player_props", lambda *a: [])
+    vba.run(c, telegram=False)
+    rows = vba.read_bets(vba.bets_file(c))
+    kinds = {r["kind"] for r in rows}
+    assert {"parlay", "nofav", "city"} <= kinds
+    # todos los partidos terminan 1-1 hace un día
+    past = (vba.datetime.now(vba.timezone.utc) - vba.timedelta(days=1))
+    for r in rows:
+        legs = vba.json.loads(r["legs"])
+        for lg in legs:
+            lg["kickoff"] = past.isoformat()
+        r["legs"] = vba.json.dumps(legs)
+    vba.write_bets(vba.bets_file(c), rows)
+    res = [{"id": e["id"], "home": e["home_team"], "away": e["away_team"], "home_goals": 1, "away_goals": 1,
+            "date": past.date().isoformat()} for evs in data.values() for e in evs]
+    monkeypatch.setattr(vba, "fetch_scores_odds_api", lambda sk, cf: res)
+    assert vba.settle_pending(c) > 0
+    st = vba.bets_stats(vba.bets_file(c))
+    assert sum(k["n"] for k in st.values()) == len(rows)
+    report = vba.strip_html(vba.history_section({"n": 0}, c, st))
+    assert "Parlays" in report and "ROI" in report
+
+
+def test_leagues_without_games_cost_nothing(tmp_path, monkeypatch):
+    c = vba.load_config()
+    c.update(MODE="seguro", ODDS_API_KEY="x", HISTORY_FILE=str(tmp_path / "h.csv"))
+    called = []
+    monkeypatch.setattr(vba, "has_events", lambda sk, *a: sk == "soccer_epl")
+    monkeypatch.setattr(vba, "fetch_odds", lambda sk, cf: (called.append(sk), ([], "400"))[1])
+    vba.run(c, telegram=False)
+    assert called == ["soccer_epl"]
