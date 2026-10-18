@@ -19,6 +19,16 @@ The Odds-API no tiene cuotas de casas mexicanas (BetMéxico, Caliente, Codere MX
 - Cuota de BetMéxico **< mínima** → sáltalo. Aunque aciertes seguido, a la larga pierdes dinero.
 - **⭐ Seguro + valor**: el pick es muy probable *y* alguna casa ya paga más que la cuota justa. Son los mejores del día y salen primero.
 
+### Momios americanos y parlays
+
+- Todo se muestra en **momio americano** (como en BetMéxico) con la cuota decimal entre paréntesis. Ejemplo: `-296 (1.34)`. Un momio **paga más** cuanto más cerca de cero esté si es negativo (-250 paga más que -300) o cuanto más alto si es positivo.
+- **🎰 Parlays sugeridas**: cada día arma hasta 3 con los picks más probables:
+  - 🛡️ *Doble más segura*: las 2 selecciones más probables.
+  - ⚖️ *Triple equilibrada*: las 3 más probables, si juntas tienen ≥40 %.
+  - 💰 *Mayor pago*: la combinación que más paga sin bajar de 40 % de probabilidad.
+- Te dice la **probabilidad real de que salga completa**, el momio total mínimo y cuánto cobras con tu apuesta (`PARLAY_STAKE`, por defecto $15).
+- Cada selección tiene que cumplir su momio mínimo en BetMéxico; si no, el margen de la casa se multiplica en la parlay.
+
 ### Lo que debes saber
 
 - **Alta probabilidad no es certeza.** Con 75 % de acierto fallas 1 de cada 4. Una derrota a cuota 1.40 borra 2.5 aciertos.
@@ -103,6 +113,8 @@ Desde el celular: como *Variables* en GitHub. En PC: dentro de `config.json`.
 | `MODE` | `seguro` | `seguro` (alta probabilidad) o `valor` (EV). |
 | `SAFE_MIN_PROB` | `0.65` | Probabilidad mínima de acierto en modo seguro. Súbela a `0.75` para picks más seguros (pagan menos). |
 | `SAFE_MIN_ODDS` | `1.20` | Descarta picks que pagarían menos de esto. |
+| `PARLAY_STAKE` | `15` | Cuánto apuestas por parlay (en pesos). |
+| `PARLAY_MIN_PROB` | `0.40` | Probabilidad mínima para sugerir una parlay. |
 | `SAFE_STAKE_PCT` | `0.02` | Stake fijo por pick en modo seguro (2 % de la banca). |
 | `MIN_EV` | `0.02` | EV mínimo. `0` = todo valor positivo (más picks, más ruido). |
 | `MAX_PICKS` | `10` | Picks máximos por día. |

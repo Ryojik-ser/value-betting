@@ -20,6 +20,7 @@ jobs:
       MIN_EV: ${{ vars.MIN_EV }}
       MODE: ${{ vars.MODE }}
       SAFE_MIN_PROB: ${{ vars.SAFE_MIN_PROB }}
+      PARLAY_STAKE: ${{ vars.PARLAY_STAKE }}
       HISTORY_FILE: data/picks_history.csv
     steps:
       - uses: actions/checkout@v4

@@ -71,6 +71,11 @@ DEFAULTS = {
     "SAFE_MIN_PROB": 0.65,        # probabilidad mínima de acierto en modo seguro
     "SAFE_MIN_ODDS": 1.20,        # descarta picks que pagarían menos de 1.20
     "SAFE_STAKE_PCT": 0.02,       # stake fijo en modo seguro (2 % de la banca)
+    # Parlays sugeridas (se arman con los picks de alta probabilidad del día)
+    "PARLAY_STAKE": 15.0,         # cuánto pondrías en cada parlay
+    "PARLAY_MAX_LEGS": 3,         # máximo de selecciones por parlay
+    "PARLAY_MIN_PROB": 0.40,      # no sugerir parlays con menos de 40 % de probabilidad
+    "CURRENCY": "$",
     "REGIONS": "eu",              # eu incluye Pinnacle; puedes usar "eu,uk"
     "HOURS_AHEAD": 24,            # ventana de partidos a analizar
     "MIN_EV": 0.02,               # EV mínimo (2 %). 0 = cualquier valor positivo
@@ -621,6 +626,49 @@ def history_stats(path: str) -> dict:
 # ---------------------------------------------------------------------------
 # Informe
 # ---------------------------------------------------------------------------
+def american(decimal_odds: float) -> str:
+    """Convierte cuota decimal a momio americano (+150, -250...)."""
+    if decimal_odds <= 1.0:
+        return "—"
+    if decimal_odds >= 2.0:
+        return f"+{round((decimal_odds - 1) * 100)}"
+    return f"-{round(100 / (decimal_odds - 1))}"
+
+
+def odds_txt(decimal_odds: float) -> str:
+    """Momio americano con la cuota decimal entre paréntesis."""
+    return f"{american(decimal_odds)} ({decimal_odds:.2f})"
+
+
+def build_parlays(picks: list[Pick], cfg: dict) -> list[dict]:
+    """Sugiere hasta 3 parlays con los picks más probables (un pick por partido):
+    la doble más segura, la triple más segura y la de mayor pago que aún tenga
+    al menos PARLAY_MIN_PROB de probabilidad."""
+    from itertools import combinations
+    from math import prod
+
+    pool = sorted(picks, key=lambda p: p.fair_prob, reverse=True)[:8]
+    max_legs = max(2, int(cfg["PARLAY_MAX_LEGS"]))
+    min_prob = cfg["PARLAY_MIN_PROB"]
+    if len(pool) < 2:
+        return []
+
+    def make(name, legs):
+        prob = prod(p.fair_prob for p in legs)
+        return {"name": name, "legs": list(legs), "prob": prob, "odds": 1 / prob}
+
+    out = [make("🛡️ Doble más segura", pool[:2])]
+    if max_legs >= 3 and len(pool) >= 3 and prod(p.fair_prob for p in pool[:3]) >= min_prob:
+        out.append(make("⚖️ Triple equilibrada", pool[:3]))
+    combos = [c for n in range(2, max_legs + 1) for c in combinations(pool, n)
+              if prod(p.fair_prob for p in c) >= min_prob]
+    if combos:
+        best = max(combos, key=lambda c: 1 / prod(p.fair_prob for p in c))
+        if all({id(x) for x in best} != {id(x) for x in o["legs"]} for o in out):
+            out.append(make("💰 Mayor pago (aún ≥{:.0f}%)".format(min_prob * 100), best))
+    return out
+
+
 def pct(x: float) -> str:
     return f"{x * 100:+.1f}%"
 
@@ -640,10 +688,10 @@ def build_report(reviews: list[MatchReview], picks: list[Pick], cfg: dict, stats
                 "",
                 f"<b>{i}. {e(p.home)} vs {e(p.away)}</b>",
                 f"🏆 {e(p.league)} · 🕒 {p.kickoff.strftime('%d/%m %H:%M')}",
-                f"🎯 <b>{OUTCOME_LABEL[p.outcome]} – {e(p.selection)}</b> @ <b>{p.odds:.2f}</b> ({e(p.bookmaker)})",
-                f"📈 EV {pct(p.ev)} · Prob. justa {p.fair_prob * 100:.1f}% · Cuota justa {p.fair_odds:.2f}",
+                f"🎯 <b>{OUTCOME_LABEL[p.outcome]} – {e(p.selection)}</b> @ <b>{odds_txt(p.odds)}</b> ({e(p.bookmaker)})",
+                f"📈 EV {pct(p.ev)} · Prob. justa {p.fair_prob * 100:.1f}% · Momio justo {american(p.fair_odds)}",
                 f"💰 Stake: {p.stake_pct * 100:.1f}% de banca ≈ {p.stake:.2f} · {p.n_books} casas ({p.source})",
-                f"📱 En {e(cfg['MAIN_BOOK'])}: apuesta solo si la cuota es ≥ <b>{p.min_odds:.2f}</b>",
+                f"📱 En {e(cfg['MAIN_BOOK'])}: apuesta solo si el momio paga ≥ <b>{odds_txt(p.min_odds)}</b>",
             ]
     else:
         lines.append("❌ Hoy no hay picks con valor suficiente. No apostar también es una decisión ganadora.")
@@ -680,17 +728,18 @@ def build_safe_report(reviews: list[MatchReview], picks: list[Pick], cfg: dict, 
                       remaining: str | None, today: datetime) -> str:
     e = html.escape
     book = e(cfg["MAIN_BOOK"])
+    cur = e(cfg.get("CURRENCY", "$"))
     lines = [f"<b>🛡️ Picks de alta probabilidad · {today.strftime('%d/%m/%Y')}</b>",
              f"Partidos revisados: <b>{len(reviews)}</b> · Picks: <b>{len(picks)}</b>", ""]
     if picks:
         expected_misses = sum(1 - p.fair_prob for p in picks)
         lines += [
             f"De estos {len(picks)} picks, lo esperable es fallar ≈ <b>{expected_misses:.1f}</b>.",
-            f"Abre {book} y apuesta <b>solo</b> si su cuota es igual o mayor a la indicada; "
-            "si es menor, sáltalo (a la larga pierdes dinero).",
+            f"Abre {book} y apuesta <b>solo</b> si su momio paga igual o más que el indicado "
+            "(ej. -300 paga más que -400); si paga menos, sáltalo.",
         ]
         for i, p in enumerate(picks, 1):
-            ref = f" · Mejor cuota en Europa: {p.odds:.2f} ({e(p.bookmaker)})" if p.odds else ""
+            ref = f" · Mejor en Europa: {american(p.odds)} ({e(p.bookmaker)})" if p.odds else ""
             lines += [
                 "",
                 f"<b>{i}. {e(p.home)} vs {e(p.away)}</b>",
@@ -698,14 +747,14 @@ def build_safe_report(reviews: list[MatchReview], picks: list[Pick], cfg: dict, 
                 f"🎯 <b>{OUTCOME_LABEL[p.outcome]} – {e(p.selection)}</b>"
                 + (" (doble oportunidad)" if "_" in p.outcome else ""),
                 f"✅ Probabilidad de acierto: <b>{p.fair_prob * 100:.0f}%</b>",
-                f"📱 En {book}: cuota mínima <b>{p.min_odds:.2f}</b>{ref}",
-                f"💰 Stake fijo: {p.stake_pct * 100:.0f}% de banca ≈ {p.stake:.2f} · "
-                f"si aciertas ganas ≥ {p.stake * (p.min_odds - 1):.2f}",
+                f"📱 En {book}: momio mínimo <b>{odds_txt(p.min_odds)}</b>{ref}",
+                f"💰 Stake sencillo: {cur}{p.stake:.2f} ({p.stake_pct * 100:.0f}% de banca) · "
+                f"si aciertas ganas ≥ {cur}{p.stake * (p.min_odds - 1):.2f}",
             ]
             if p.odds and p.odds > p.min_odds:
                 lines.append(f"⭐ <b>Seguro + valor</b>: el mercado ya paga {pct(p.odds / p.min_odds - 1)} "
                              "por encima de la cuota justa")
-        lines += ["", "<i>Nunca los combines en un parlay: 5 picks al 75% aciertan juntos solo el 24% de las veces.</i>"]
+        lines += parlay_lines(picks, cfg)
     else:
         lines.append(f"❌ Hoy no hay partidos con ≥{cfg['SAFE_MIN_PROB'] * 100:.0f}% de probabilidad "
                      f"que paguen al menos {cfg['SAFE_MIN_ODDS']:.2f}. Hoy no se apuesta.")
@@ -718,9 +767,39 @@ def build_safe_report(reviews: list[MatchReview], picks: list[Pick], cfg: dict, 
             lines.append(f"• {r.kickoff.strftime('%H:%M')} {e(r.home)} vs {e(r.away)} — {tag}")
 
     lines += history_lines(stats, remaining)
-    lines += ["", "<i>Alta probabilidad no es certeza: una derrota a cuota 1.40 borra 2.5 aciertos. "
+    lines += ["", "<i>Alta probabilidad no es certeza: una derrota a momio -250 borra 2.5 aciertos. "
               "Apuesta solo lo que puedas perder. +18</i>"]
     return "\n".join(lines)
+
+
+def parlay_lines(picks: list[Pick], cfg: dict) -> list[str]:
+    e = html.escape
+    cur = e(cfg.get("CURRENCY", "$"))
+    stake = cfg["PARLAY_STAKE"]
+    parlays = build_parlays(picks, cfg)
+    if not parlays:
+        return []
+    lines = ["", "<b>🎰 PARLAYS SUGERIDAS</b>",
+             f"Cada selección debe cumplir su momio mínimo en {e(cfg['MAIN_BOOK'])}; si una no lo cumple, "
+             "cámbiala o arma una doble."]
+    for par in parlays:
+        payout = stake * par["odds"]
+        lines += ["", f"<b>{par['name']}</b> · {len(par['legs'])} selecciones"]
+        for p in par["legs"]:
+            lines.append(f"• {OUTCOME_LABEL[p.outcome]} {e(p.selection)} ({e(p.home)} vs {e(p.away)}) "
+                         f"— mín. {american(p.min_odds)}")
+        lines += [
+            f"✅ Probabilidad de que salga completa: <b>{par['prob'] * 100:.0f}%</b> "
+            f"(falla ≈ {round((1 - par['prob']) * 10)} de cada 10)",
+            f"📱 Momio total mínimo: <b>{odds_txt(par['odds'])}</b>",
+            f"💵 Con {cur}{stake:.0f} cobras ≥ {cur}{payout:.2f} (ganancia ≥ {cur}{payout - stake:.2f})",
+        ]
+    bank = cfg.get("BANKROLL") or 0
+    if bank and stake > 0.10 * bank:
+        lines += ["", f"⚠️ {cur}{stake:.0f} por parlay es el {stake / bank * 100:.0f}% de tu banca. "
+                  f"Dos parlays perdidas seguidas te quitan {min(2 * stake / bank, 1) * 100:.0f}%."]
+    lines.append("<i>Más selecciones = más pago pero menos probabilidad. Por encima de 3 casi siempre pierdes.</i>")
+    return lines
 
 
 # ---------------------------------------------------------------------------

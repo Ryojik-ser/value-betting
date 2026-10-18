@@ -28,8 +28,8 @@ def test_expected_value_and_kelly():
 
 def test_demo_finds_value_and_ranks_by_ev():
     report = vba.strip_html(vba.run(cfg(), demo=True, telegram=False))
-    assert "Chelsea @ 4.20" in report
-    assert "Empate @ 3.60" in report
+    assert "Chelsea @ +320 (4.20)" in report
+    assert "Empate @ +260 (3.60)" in report
     assert report.index("Chelsea") < report.index("Empate")      # mayor EV primero
     assert "pocas casas" in report                              # Getafe-Osasuna
 
@@ -67,7 +67,7 @@ def test_split_message():
 def test_safe_mode_high_probability_picks():
     report = vba.strip_html(vba.run(cfg(MODE="seguro"), demo=True, telegram=False))
     assert "1X – Arsenal o empate" in report
-    assert "cuota mínima 1.34" in report
+    assert "momio mínimo -296 (1.34)" in report
     assert "1 – Inter" in report                                 # 1X pagaría < 1.20
     assert report.index("Arsenal") < report.index("Inter")       # más probable primero
 
@@ -97,3 +97,19 @@ def test_safe_mode_flags_market_value_first():
         vba.demo_events = orig
     assert "Seguro + valor" in report
     assert report.index("Inter") < report.index("Arsenal")
+
+
+def test_american_odds():
+    assert vba.american(2.50) == "+150"
+    assert vba.american(1.25) == "-400"
+    assert vba.american(2.00) == "+100"
+
+
+def test_parlays_respect_min_prob_and_stake():
+    picks = [p for r in [vba.analyze_event(ev, "L", cfg(MODE="seguro"), vba.timezone.utc)
+                         for evs in vba.demo_events().values() for ev in evs] for p in r.picks]
+    parlays = vba.build_parlays(picks, cfg(MODE="seguro"))
+    assert parlays and all(p["prob"] >= 0.40 for p in parlays[1:])
+    assert abs(parlays[0]["prob"] - picks[0].fair_prob * picks[1].fair_prob) < 1e-9
+    report = vba.strip_html(vba.run(cfg(MODE="seguro", BANKROLL=50), demo=True, telegram=False))
+    assert "PARLAYS SUGERIDAS" in report and "30% de tu banca" in report
