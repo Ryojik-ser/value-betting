@@ -661,8 +661,12 @@ def build_safe_report(reviews: list[MatchReview], picks: list[Pick], cfg: dict, 
                 + (" (doble oportunidad)" if "_" in p.outcome else ""),
                 f"✅ Probabilidad de acierto: <b>{p.fair_prob * 100:.0f}%</b>",
                 f"📱 En {book}: cuota mínima <b>{p.min_odds:.2f}</b>{ref}",
-                f"💰 Stake fijo: {p.stake_pct * 100:.0f}% de banca ≈ {p.stake:.2f}",
+                f"💰 Stake fijo: {p.stake_pct * 100:.0f}% de banca ≈ {p.stake:.2f} · "
+                f"si aciertas ganas ≥ {p.stake * (p.min_odds - 1):.2f}",
             ]
+            if p.odds and p.odds > p.min_odds:
+                lines.append(f"⭐ <b>Seguro + valor</b>: el mercado ya paga {pct(p.odds / p.min_odds - 1)} "
+                             "por encima de la cuota justa")
         lines += ["", "<i>Nunca los combines en un parlay: 5 picks al 75% aciertan juntos solo el 24% de las veces.</i>"]
     else:
         lines.append(f"❌ Hoy no hay partidos con ≥{cfg['SAFE_MIN_PROB'] * 100:.0f}% de probabilidad "
@@ -754,7 +758,13 @@ def run(cfg: dict, demo: bool = False, telegram: bool = True) -> str:
             review = analyze_event(event, league, cfg, tz)
             reviews.append(review)
 
-    sort_key = (lambda p: p.fair_prob) if cfg.get("MODE") == "seguro" else (lambda p: p.ev)
+    if cfg.get("MODE") == "seguro":
+        # Primero los que además tienen valor en el mercado; luego por probabilidad.
+        def sort_key(p):
+            return (bool(p.odds and p.odds > p.min_odds), p.fair_prob)
+    else:
+        def sort_key(p):
+            return p.ev
     picks = sorted((p for r in reviews for p in r.picks), key=sort_key, reverse=True)[: cfg["MAX_PICKS"]]
 
     if not demo:

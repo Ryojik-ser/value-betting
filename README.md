@@ -17,6 +17,7 @@ The Odds-API no tiene cuotas de casas mexicanas (BetMéxico, Caliente, Codere MX
 
 - Cuota de BetMéxico **≥ mínima** → apuesta.
 - Cuota de BetMéxico **< mínima** → sáltalo. Aunque aciertes seguido, a la larga pierdes dinero.
+- **⭐ Seguro + valor**: el pick es muy probable *y* alguna casa ya paga más que la cuota justa. Son los mejores del día y salen primero.
 
 ### Lo que debes saber
 

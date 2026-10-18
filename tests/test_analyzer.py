@@ -83,3 +83,17 @@ def test_double_chance_settlement():
     res = [{"id": "z", "home": "Arsenal", "away": "Chelsea", "home_goals": 1, "away_goals": 1, "date": "2026-10-17"}]
     assert vba.settle_rows(rows, res) == 1
     assert rows[0]["status"] == "ganada" and rows[0]["profit"] == "6.80"
+
+
+def test_safe_mode_flags_market_value_first():
+    events = vba.demo_events()
+    # Inter paga 1.60 en una casa: por encima de su cuota justa (~1.51) -> "seguro + valor"
+    events["soccer_italy_serie_a"][0]["bookmakers"][1]["markets"][0]["outcomes"][0]["price"] = 1.60
+    orig = vba.demo_events
+    vba.demo_events = lambda: events
+    try:
+        report = vba.strip_html(vba.run(cfg(MODE="seguro"), demo=True, telegram=False))
+    finally:
+        vba.demo_events = orig
+    assert "Seguro + valor" in report
+    assert report.index("Inter") < report.index("Arsenal")
