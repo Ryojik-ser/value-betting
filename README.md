@@ -40,6 +40,17 @@ El público apuesta sobre todo al favorito o al equipo popular (América, Chivas
 - **⭐** cuando alguna casa ya paga por encima de la probabilidad real (valor ≥ 2 %); esos salen primero.
 - Se usan como sencillas o como **una** selección dentro de una doble, nunca varios juntos.
 
+### 🩵 Apartado Manchester City · Haaland
+
+Sale **arriba de todo** en cada informe: el partido del City de hoy o, si no juega, el próximo (hasta 7 días).
+
+- Probabilidades de City / empate / rival y goles esperados.
+- Picks del City: gana, gana o empata, más de 1.5 goles, gana + más de 1.5, no recibe gol.
+- Picks de Haaland: **anota en cualquier momento**, **2 o más goles** y **Gana City + Haaland anota** ("Crear apuesta").
+- Cómo se calculan los goles de Haaland: cada gol esperado del City es suyo con la proporción de goles que lleva en la temporada (con la clave de football-data se calcula sola; sin ella usa 33 %). Si el partido es en menos de 30 h, también descarga los **momios reales de goleador** de las casas (≈2 créditos) y los mezcla con el modelo.
+- Iconos: ✅ ≥60 % · ⚠️ 45–60 % · 🎲 menos de 45 %.
+- Cámbialo a otro equipo o jugador con `FOCUS_TEAM` y `FOCUS_PLAYER`.
+
 ### Lo que debes saber
 
 - **Alta probabilidad no es certeza.** Con 75 % de acierto fallas 1 de cada 4. Una derrota a cuota 1.40 borra 2.5 aciertos.

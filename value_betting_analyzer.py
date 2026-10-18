@@ -85,6 +85,12 @@ DEFAULTS = {
     "DOG_MIN_PROB": 0.55,         # probabilidad mínima
     "DOG_MIN_ODDS": 1.45,         # que pague al menos 1.45 (-222)
     "DOG_MAX": 4,                 # cuántas mostrar
+    # Apartado de tu equipo y jugador favoritos
+    "FOCUS_TEAM": "Manchester City",
+    "FOCUS_PLAYER": "Erling Haaland",
+    "FOCUS_PLAYER_SHARE": 0.33,   # parte de los goles del equipo que anota (se recalcula con football-data)
+    "FOCUS_PROPS": True,          # descargar momios de goleador (≈2 créditos por partido del equipo)
+    "FOCUS_DAYS": 7,              # muestra el próximo partido aunque falten hasta 7 días
     "MARKETS": "h2h,totals",      # mercados a descargar (ganador + total de goles)
     "CURRENCY": "$",
     "REGIONS": "eu",              # eu incluye Pinnacle; puedes usar "eu,uk"
@@ -927,13 +933,160 @@ def pct(x: float) -> str:
     return f"{x * 100:+.1f}%"
 
 
+# ---------------------------------------------------------------------------
+# Apartado del equipo y jugador favoritos (por defecto: Manchester City y Haaland)
+# ---------------------------------------------------------------------------
+def fetch_player_props(sport_key: str, event_id: str, cfg: dict) -> list[tuple[float, str]]:
+    """Momios de 'anota en cualquier momento' del jugador (2 créditos: regiones uk y eu)."""
+    r = _requests().get(
+        f"{ODDS_API_URL}/sports/{sport_key}/events/{event_id}/odds",
+        params={"apiKey": cfg["ODDS_API_KEY"], "regions": "uk,eu", "markets": "player_goal_scorer_anytime",
+                "oddsFormat": "decimal"},
+        timeout=30,
+    )
+    if not r.ok:
+        return []
+    surname = cfg["FOCUS_PLAYER"].split()[-1].lower()
+    prices = []
+    for bk in r.json().get("bookmakers", []):
+        for mk in bk.get("markets", []):
+            for o in mk.get("outcomes", []):
+                who = f"{o.get('description', '')} {o.get('name', '')}".lower()
+                if surname in who and str(o.get("name", "")).lower() != "no" and o.get("price", 0) > 1:
+                    prices.append((float(o["price"]), bk.get("title", bk.get("key", ""))))
+    return prices
+
+
+def fetch_player_season(cfg: dict) -> dict | None:
+    """Goles del jugador y del equipo en la Premier esta temporada (football-data.org, gratis)."""
+    if not cfg.get("FOOTBALL_DATA_KEY"):
+        return None
+    req, hdr = _requests(), {"X-Auth-Token": cfg["FOOTBALL_DATA_KEY"]}
+    try:
+        sc = req.get(f"{FOOTBALL_DATA_URL}/competitions/PL/scorers", headers=hdr, params={"limit": 50}, timeout=30)
+        st = req.get(f"{FOOTBALL_DATA_URL}/competitions/PL/standings", headers=hdr, timeout=30)
+        if not (sc.ok and st.ok):
+            return None
+        surname = cfg["FOCUS_PLAYER"].split()[-1].lower()
+        player = next((x for x in sc.json().get("scorers", []) if surname in x["player"]["name"].lower()), None)
+        table = st.json()["standings"][0]["table"]
+        team = next((t for t in table if _same_team(t["team"]["name"], cfg["FOCUS_TEAM"])), None)
+        if not player or not team or not team.get("goalsFor"):
+            return None
+        return {"goals": player.get("goals") or 0, "played": player.get("playedMatches") or 0,
+                "penalties": player.get("penalties") or 0, "team_goals": team["goalsFor"],
+                "team_played": team.get("playedGames") or 0, "position": team.get("position")}
+    except Exception:
+        return None
+
+
+def focus_analysis(review: MatchReview, cfg: dict, props: list[tuple[float, str]] | None = None,
+                   season: dict | None = None) -> dict | None:
+    """Probabilidades de los picks del equipo y del jugador favoritos en un partido."""
+    if not review.fair:
+        return None
+    team = cfg["FOCUS_TEAM"]
+    home_side = _same_team(review.home, team)
+    rival = review.away if home_side else review.home
+    share = cfg["FOCUS_PLAYER_SHARE"]
+    if season and season["team_goals"] >= 5:
+        share = min(0.6, max(0.1, season["goals"] / season["team_goals"]))
+    lh, la = fit_goals(review.fair, review.p_over25)
+    m = score_matrix(lh, la)
+    cut = 0.02 if review.p_over25 is not None else 0.04
+
+    def tg(i, j):
+        return i if home_side else j
+
+    def og(i, j):
+        return j if home_side else i
+
+    def P(fn):
+        return sum(v * fn(i, j) for i, row in enumerate(m) for j, v in enumerate(row))
+
+    def scores(n):  # P(el jugador marca al menos 1 de los n goles de su equipo)
+        return 1 - (1 - share) ** n
+
+    def brace(n):   # P(al menos 2)
+        return 1 - (1 - share) ** n - n * share * (1 - share) ** max(n - 1, 0) if n >= 2 else 0.0
+
+    ph, pd, pa = review.fair
+    p_win = ph if home_side else pa
+    player = cfg["FOCUS_PLAYER"].split()[-1]
+    p_any = P(lambda i, j: scores(tg(i, j))) - cut
+    market = None
+    if props:
+        best_price, best_book = max(props)
+        mkt_prob = statistics.median(1 / p for p, _ in props) * 0.93  # quita el margen típico del mercado
+        p_any = 0.5 * p_any + 0.5 * mkt_prob
+        market = {"best": best_price, "book": best_book, "n": len(props), "ev": best_price * p_any - 1}
+    picks = [
+        ("1X2", f"Gana {team}", p_win, "mercado"),
+        ("Doble oportunidad", f"{team} o empate", p_win + pd, "mercado"),
+        (f"Total goles {team}", f"{team} más de 1.5 goles", P(lambda i, j: tg(i, j) >= 2) - cut, "modelo"),
+        ("Crear apuesta", f"Gana {team} + más de 1.5 goles",
+         P(lambda i, j: tg(i, j) > og(i, j) and i + j >= 2) - cut, "modelo"),
+        ("Portería a cero", f"{team} no recibe gol", P(lambda i, j: og(i, j) == 0) - cut, "modelo"),
+        ("Goleador", f"{player} anota en cualquier momento", p_any, "mercado" if props else "modelo"),
+        ("Goleador", f"{player} anota 2 o más", P(lambda i, j: brace(tg(i, j))) - cut, "modelo"),
+        ("Crear apuesta", f"Gana {team} + {player} anota",
+         P(lambda i, j: scores(tg(i, j)) if tg(i, j) > og(i, j) else 0.0) - cut * 1.5, "modelo"),
+    ]
+    return {"review": review, "rival": rival, "home": home_side, "xg": (lh, la) if home_side else (la, lh),
+            "share": share, "season": season, "market": market,
+            "picks": [(mk, sel, p, src) for mk, sel, p, src in picks if 0 < p < 1]}
+
+
+def focus_lines(fa: dict | None, cfg: dict, next_only: bool = False) -> list[str]:
+    e = html.escape
+    team, player = cfg["FOCUS_TEAM"], cfg["FOCUS_PLAYER"]
+    if not fa:
+        return ["", f"<b>🩵 APARTADO {e(team.upper())}</b>",
+                f"No hay partido del {e(team)} con momios en los próximos {cfg['FOCUS_DAYS']} días."]
+    r = fa["review"]
+    cur = e(cfg.get("CURRENCY", "$"))
+    stake = cfg.get("STAKE_AMOUNT") or cfg["PARLAY_STAKE"]
+    ph, pd, pa = r.fair
+    p_team, p_riv = (ph, pa) if fa["home"] else (pa, ph)
+    lines = ["", f"<b>🩵 APARTADO {e(team.upper())} · {e(player.upper())}</b>",
+             f"{'📅 Próximo partido' if next_only else '⚽ Hoy'}: <b>{e(r.home)} vs {e(r.away)}</b> · "
+             f"{r.kickoff.strftime('%d/%m %H:%M')} · {e(r.league)}",
+             f"📊 {e(team)} {p_team * 100:.0f}% · empate {pd * 100:.0f}% · {e(fa['rival'])} {p_riv * 100:.0f}%",
+             f"⚽ Goles esperados: {e(team)} {fa['xg'][0]:.1f} – {fa['xg'][1]:.1f} {e(fa['rival'])}"]
+    sz = fa["season"]
+    if sz:
+        lines.append(f"📈 {e(player)} en Premier: {sz['goals']} goles en {sz['played']} partidos "
+                     f"({sz['penalties']} de penal) · {fa['share'] * 100:.0f}% de los goles del {e(team)}")
+    else:
+        lines.append(f"📈 {e(player)} anota ≈{fa['share'] * 100:.0f}% de los goles del {e(team)} (valor de "
+                     "referencia; con la clave de football-data se calcula con la temporada actual)")
+    lines.append("")
+    for mk, sel, p, src in sorted(fa["picks"], key=lambda x: x[2], reverse=True):
+        icon = "✅" if p >= 0.60 else "⚠️" if p >= 0.45 else "🎲"
+        tag = "" if src == "mercado" else " ·est."
+        lines.append(f"{icon} <b>{e(sel)}</b> — {p * 100:.0f}%{tag} · mín. {odds_txt(1 / p)} · "
+                     f"con {cur}{stake:.0f} ganas ≥ {cur}{stake * (1 / p - 1):.2f}")
+    mkt = fa["market"]
+    if mkt:
+        flag = (f"⭐ valor {pct(mkt['ev'])}" if mkt["ev"] >= 0.02 else "sin valor extra")
+        lines.append(f"🎯 Goleador en casas ({mkt['n']} momios): mejor {american(mkt['best'])} en "
+                     f"{e(mkt['book'])} → {flag}")
+    lines += [
+        f"<i>✅ ≥60% · ⚠️ 45–60% · 🎲 menos de 45%. Confirma que {e(player.split()[-1])} sea titular "
+        "1 h antes; si no juega, olvida sus picks. «Gana + anota» suele pagar más en BetMéxico si "
+        "cumple el mínimo.</i>",
+    ]
+    return lines
+
+
 def build_report(reviews: list[MatchReview], picks: list[Pick], cfg: dict, stats: dict,
-                 remaining: str | None, today: datetime) -> str:
+                 remaining: str | None, today: datetime, focus: list[str] | None = None) -> str:
     e = html.escape
     if cfg.get("MODE") == "seguro":
-        return build_safe_report(reviews, picks, cfg, stats, remaining, today)
+        return build_safe_report(reviews, picks, cfg, stats, remaining, today, focus)
     lines = [f"<b>📊 Value Betting · {today.strftime('%d/%m/%Y')}</b>",
              f"Partidos revisados: <b>{len(reviews)}</b> · Picks con valor: <b>{len(picks)}</b>", ""]
+    lines += (focus or []) + ([""] if focus else [])
 
     if picks:
         lines.append(f"<b>✅ PICKS (EV ≥ {cfg['MIN_EV'] * 100:.1f}%, de mayor a menor)</b>")
@@ -979,12 +1132,13 @@ def history_lines(stats: dict, remaining: str | None) -> list[str]:
 
 
 def build_safe_report(reviews: list[MatchReview], picks: list[Pick], cfg: dict, stats: dict,
-                      remaining: str | None, today: datetime) -> str:
+                      remaining: str | None, today: datetime, focus: list[str] | None = None) -> str:
     e = html.escape
     book = e(cfg["MAIN_BOOK"])
     cur = e(cfg.get("CURRENCY", "$"))
     lines = [f"<b>🛡️ Picks de alta probabilidad · {today.strftime('%d/%m/%Y')}</b>",
-             f"Partidos revisados: <b>{len(reviews)}</b> · Picks: <b>{len(picks)}</b>", ""]
+             f"Partidos revisados: <b>{len(reviews)}</b> · Picks: <b>{len(picks)}</b>"]
+    lines += (focus or []) + [""]
     if picks:
         expected_misses = sum(1 - p.fair_prob for p in picks)
         lines += [
@@ -1072,7 +1226,7 @@ def parlay_lines(reviews: list[MatchReview], cfg: dict) -> list[str]:
 def demo_events() -> dict[str, list[dict]]:
     start = (datetime.now(timezone.utc) + timedelta(hours=6)).replace(minute=0, second=0, microsecond=0)
 
-    totals = {"Arsenal": (1.95, 1.90), "Real Betis": (2.05, 1.80), "Inter": (1.70, 2.15), "Getafe": (2.40, 1.60)}
+    totals = {"Manchester City": (1.55, 2.50), "Arsenal": (1.95, 1.90), "Real Betis": (2.05, 1.80), "Inter": (1.70, 2.15), "Getafe": (2.40, 1.60)}
 
     def bk(key, title, h, d, a, home, away):
         over, under = totals[home]
@@ -1091,7 +1245,11 @@ def demo_events() -> dict[str, list[dict]]:
         "soccer_epl": [ev(1, "soccer_epl", "Arsenal", "Chelsea", [
             ("pinnacle", "Pinnacle", 2.05, 3.55, 3.85), ("bet365", "Bet365", 2.00, 3.50, 3.75),
             ("williamhill", "William Hill", 2.00, 3.40, 4.20), ("unibet", "Unibet", 2.02, 3.45, 3.70),
-            ("betfair_ex_eu", "Betfair", 2.04, 3.50, 3.80), ("marathonbet", "Marathon Bet", 2.06, 3.50, 3.78)])],
+            ("betfair_ex_eu", "Betfair", 2.04, 3.50, 3.80), ("marathonbet", "Marathon Bet", 2.06, 3.50, 3.78)]),
+            ev(5, "soccer_epl", "Manchester City", "Wolverhampton Wanderers", [
+                ("pinnacle", "Pinnacle", 1.30, 6.00, 10.5), ("bet365", "Bet365", 1.29, 5.75, 10.0),
+                ("williamhill", "William Hill", 1.28, 6.00, 11.0), ("unibet", "Unibet", 1.30, 5.80, 9.50),
+                ("betsson", "Betsson", 1.29, 6.10, 10.0)])],
         "soccer_spain_la_liga": [ev(2, "soccer_spain_la_liga", "Real Betis", "Sevilla", [
             ("pinnacle", "Pinnacle", 2.30, 3.30, 3.35), ("bet365", "Bet365", 2.25, 3.25, 3.20),
             ("codere", "Codere", 2.25, 3.60, 3.20), ("unibet", "Unibet", 2.28, 3.20, 3.25),
@@ -1124,6 +1282,8 @@ def run(cfg: dict, demo: bool = False, telegram: bool = True) -> str:
             print(f"⚠️  No se pudieron liquidar picks: {exc}")
 
     reviews: list[MatchReview] = []
+    focus_event = None  # (kickoff, event, league)
+    focus_limit = now + timedelta(days=cfg.get("FOCUS_DAYS", 7))
     remaining = None
     data = demo_events() if demo else None
     for sport_key, league in cfg["LEAGUES"].items():
@@ -1139,9 +1299,14 @@ def run(cfg: dict, demo: bool = False, telegram: bool = True) -> str:
                 continue
         for event in events:
             ko = datetime.fromisoformat(event["commence_time"].replace("Z", "+00:00"))
+            event.setdefault("sport_key", sport_key)
+            team = cfg.get("FOCUS_TEAM")
+            if team and now <= ko <= focus_limit and (_same_team(event["home_team"], team)
+                                                      or _same_team(event["away_team"], team)):
+                if focus_event is None or ko < focus_event[0]:
+                    focus_event = (ko, event, league)
             if not (now <= ko <= horizon):
                 continue
-            event.setdefault("sport_key", sport_key)
             review = analyze_event(event, league, cfg, tz)
             reviews.append(review)
 
@@ -1157,7 +1322,26 @@ def run(cfg: dict, demo: bool = False, telegram: bool = True) -> str:
     if not demo:
         record_picks(picks, cfg["HISTORY_FILE"])
     stats = history_stats(cfg["HISTORY_FILE"]) if not demo else {"n": 0}
-    report = build_report(reviews, picks, cfg, stats, remaining, now.astimezone(tz))
+
+    focus = None
+    if cfg.get("FOCUS_TEAM"):
+        fa = None
+        if focus_event:
+            ko, ev, league = focus_event
+            fr = analyze_event(ev, league, {**cfg, "MIN_BOOKS": min(cfg["MIN_BOOKS"], 3)}, tz)
+            props = None
+            if not demo and cfg.get("FOCUS_PROPS") and ko <= now + timedelta(hours=30):
+                try:
+                    props = fetch_player_props(ev["sport_key"], ev["id"], cfg)
+                except Exception as exc:
+                    print(f"⚠️  No se pudieron descargar momios de goleador: {exc}")
+            season = None if demo else fetch_player_season(cfg)
+            fa = focus_analysis(fr, cfg, props, season)
+            focus = focus_lines(fa, cfg, next_only=ko > horizon)
+        else:
+            focus = focus_lines(None, cfg)
+
+    report = build_report(reviews, picks, cfg, stats, remaining, now.astimezone(tz), focus)
 
     if telegram:
         send_telegram(report, cfg)

@@ -145,3 +145,28 @@ def test_underdog_picks_are_non_favorites_with_good_prob_and_payout():
     rv = [vba.analyze_event(ev, "L", c, vba.timezone.utc) for ev in events["soccer_spain_la_liga"]]
     star = vba.underdog_picks(rv, c)[0]
     assert star["ev"] is not None and star["ev"] >= 0.02
+
+
+def test_focus_team_section():
+    report = vba.strip_html(vba.run(cfg(MODE="seguro"), demo=True, telegram=False))
+    assert "APARTADO MANCHESTER CITY" in report
+    assert "Haaland anota en cualquier momento" in report
+    assert "Gana Manchester City + Haaland anota" in report
+    reviews, c = _demo_reviews()
+    city = next(r for r in reviews if r.home == "Manchester City")
+    fa = vba.focus_analysis(city, c)
+    probs = {sel: p for _, sel, p, _ in fa["picks"]}
+    # coherencia: ganar + anota nunca es más probable que cada parte por separado
+    assert probs["Gana Manchester City + Haaland anota"] < probs["Haaland anota en cualquier momento"]
+    assert probs["Gana Manchester City + Haaland anota"] < probs["Gana Manchester City"]
+    # con momios reales de goleador se mezcla con el mercado
+    fa2 = vba.focus_analysis(city, c, props=[(1.50, "Bet365"), (1.55, "Unibet")])
+    assert fa2["market"]["best"] == 1.55
+
+
+def test_focus_season_share():
+    reviews, c = _demo_reviews()
+    city = next(r for r in reviews if r.home == "Manchester City")
+    fa = vba.focus_analysis(city, c, season={"goals": 12, "played": 8, "penalties": 2,
+                                              "team_goals": 24, "team_played": 8, "position": 1})
+    assert abs(fa["share"] - 0.5) < 1e-9
