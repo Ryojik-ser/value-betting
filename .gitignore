@@ -1,0 +1,6 @@
+config.json
+picks_history.csv
+__pycache__/
+*.pyc
+.venv/
+analyzer.log

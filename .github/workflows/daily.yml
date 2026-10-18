@@ -1,0 +1,40 @@
+name: Informe diario de apuestas de valor
+
+on:
+  schedule:
+    - cron: "7 14 * * *"   # 08:07 hora de Ciudad de México (UTC-6)
+  workflow_dispatch: {}     # botón "Run workflow" para lanzarlo a mano
+
+permissions:
+  contents: write           # para guardar el historial de picks
+
+jobs:
+  analyze:
+    runs-on: ubuntu-latest
+    env:
+      TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+      TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+      ODDS_API_KEY: ${{ secrets.ODDS_API_KEY }}
+      FOOTBALL_DATA_KEY: ${{ secrets.FOOTBALL_DATA_KEY }}
+      BANKROLL: ${{ vars.BANKROLL }}
+      MIN_EV: ${{ vars.MIN_EV }}
+      HISTORY_FILE: data/picks_history.csv
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements.txt
+      - name: Analizar y enviar a Telegram
+        if: env.ODDS_API_KEY != '' && env.TELEGRAM_TOKEN != ''
+        run: |
+          mkdir -p data
+          python value_betting_analyzer.py
+      - name: Guardar historial de picks
+        if: env.ODDS_API_KEY != '' && env.TELEGRAM_TOKEN != ''
+        run: |
+          git config user.name "value-betting-bot"
+          git config user.email "value-betting-bot@users.noreply.github.com"
+          git add -f data/picks_history.csv 2>/dev/null || exit 0
+          git diff --cached --quiet || git commit -m "Historial de picks $(date -u +%F)"
+          git push
