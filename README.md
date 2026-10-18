@@ -31,6 +31,15 @@ The Odds-API no tiene cuotas de casas mexicanas (BetMéxico, Caliente, Codere MX
 - Consume 2 créditos por liga (ganador + goles): ~14 al día con 7 ligas, ~420 al mes.
 - Cada selección tiene que cumplir su momio mínimo en BetMéxico; si no, el margen de la casa se multiplica en la parlay.
 
+### 🐺 No favoritos con respaldo
+
+El público apuesta sobre todo al favorito o al equipo popular (América, Chivas, Real Madrid…), y las casas recreativas bajan el pago de ese lado. Eso puede dejar al **no favorito pagando más de lo que debería**.
+
+- Por partido busca la mejor selección del no favorito: *gana*, *o empate* (doble oportunidad), *+1.5 de hándicap* (no pierde por 2 o más) o *anota al menos un gol*.
+- Filtro: probabilidad **≥ 55 %** y pago **≥ -222 (1.45)**.
+- **⭐** cuando alguna casa ya paga por encima de la probabilidad real (valor ≥ 2 %); esos salen primero.
+- Se usan como sencillas o como **una** selección dentro de una doble, nunca varios juntos.
+
 ### Lo que debes saber
 
 - **Alta probabilidad no es certeza.** Con 75 % de acierto fallas 1 de cada 4. Una derrota a cuota 1.40 borra 2.5 aciertos.
@@ -118,6 +127,8 @@ Desde el celular: como *Variables* en GitHub. En PC: dentro de `config.json`.
 | `PARLAY_STAKE` | `5` | Cuánto apuestas por parlay (en pesos). |
 | `STAKE_AMOUNT` | `5` | Monto fijo por apuesta sencilla (`0` = usar `SAFE_STAKE_PCT`). |
 | `PARLAY_MIN_PROB` | `0.40` | Probabilidad mínima para sugerir una parlay. |
+| `DOG_MIN_PROB` | `0.55` | Probabilidad mínima para un no favorito. |
+| `DOG_MIN_ODDS` | `1.45` | Pago mínimo del no favorito (-222). |
 | `SAFE_STAKE_PCT` | `0.02` | Stake fijo por pick en modo seguro (2 % de la banca). |
 | `MIN_EV` | `0.02` | EV mínimo. `0` = todo valor positivo (más picks, más ruido). |
 | `MAX_PICKS` | `10` | Picks máximos por día. |

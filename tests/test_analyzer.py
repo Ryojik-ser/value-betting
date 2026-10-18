@@ -126,3 +126,22 @@ def test_parlays_one_leg_per_match_and_limits():
         assert all(lg.prob >= c["LEG_MIN_PROB"] for lg in par["legs"])
     report = vba.strip_html(vba.run(c, demo=True, telegram=False))
     assert "PARLAYS SUGERIDAS" in report and "30% de tu banca" in report and "Notas del analista" in report
+
+
+def test_underdog_picks_are_non_favorites_with_good_prob_and_payout():
+    reviews, c = _demo_reviews()
+    picks = vba.underdog_picks(reviews, c)
+    assert picks
+    for p in picks:
+        lg = p["leg"]
+        assert lg.prob >= c["DOG_MIN_PROB"] and lg.min_odds >= c["DOG_MIN_ODDS"]
+        assert "Real Betis" not in lg.selection and "Inter " not in lg.selection  # nunca el favorito
+    assert any(p["leg"].selection == "Sevilla o empate" for p in picks)
+    # ⭐ cuando una casa paga por encima de la cuota justa
+    events = vba.demo_events()
+    for bk in events["soccer_spain_la_liga"][0]["bookmakers"]:
+        if bk["key"] == "betsson":
+            bk["markets"][0]["outcomes"][1]["price"] = 3.90  # Sevilla
+    rv = [vba.analyze_event(ev, "L", c, vba.timezone.utc) for ev in events["soccer_spain_la_liga"]]
+    star = vba.underdog_picks(rv, c)[0]
+    assert star["ev"] is not None and star["ev"] >= 0.02

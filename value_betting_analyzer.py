@@ -81,6 +81,10 @@ DEFAULTS = {
     "LEG_MIN_PROB": 0.60,         # cada selección de parlay debe tener >= 60 %
     "LEG_MIN_ODDS": 1.15,         # ...y pagar al menos 1.15 (-667)
     "LEG_MAX_ODDS": 1.75,         # ...y como máximo 1.75 (-133)
+    # No favoritos con respaldo: selecciones del equipo NO favorito con buena probabilidad y buen pago
+    "DOG_MIN_PROB": 0.55,         # probabilidad mínima
+    "DOG_MIN_ODDS": 1.45,         # que pague al menos 1.45 (-222)
+    "DOG_MAX": 4,                 # cuántas mostrar
     "MARKETS": "h2h,totals",      # mercados a descargar (ganador + total de goles)
     "CURRENCY": "$",
     "REGIONS": "eu",              # eu incluye Pinnacle; puedes usar "eu,uk"
@@ -234,6 +238,7 @@ class MatchReview:
     event_id: str = ""
     fair: list[float] | None = None     # prob. justa [local, empate, visitante]
     p_over25: float | None = None       # prob. justa de más de 2.5 goles
+    best_prices: dict | None = None     # mejor cuota europea por resultado: {"home": (cuota, casa), ...}
 
 
 # ---------------------------------------------------------------------------
@@ -330,6 +335,11 @@ def analyze_event(event: dict, league: str, cfg: dict, tz) -> MatchReview:
         source = "consenso"
 
     review.event_id, review.fair = event["id"], fair
+    review.best_prices = {}
+    for o in order:
+        cands = [(p[o], titles[k]) for k, p in all_prices.items() if k != sharp]
+        if cands:
+            review.best_prices[o] = max(cands)
     review.p_over25 = fair_over25(event, sharp, cfg["SHARP_WEIGHT"])
 
     base = dict(event_id=event["id"], sport_key=event.get("sport_key", ""), league=league,
@@ -683,6 +693,82 @@ def history_stats(path: str) -> dict:
 # ---------------------------------------------------------------------------
 # Informe
 # ---------------------------------------------------------------------------
+def underdog_picks(reviews: list[MatchReview], cfg: dict) -> list[dict]:
+    """Por partido, la mejor selección del equipo NO favorito que tenga buena probabilidad
+    y buen pago. Si las casas europeas ya pagan por encima de la cuota justa, se marca ⭐."""
+    out = []
+    for r in reviews:
+        if not r.fair:
+            continue
+        ph, pd, pa = r.fair
+        dog_side = "away" if ph >= pa else "home"
+        dog = r.away if dog_side == "away" else r.home
+        p_win = pa if dog_side == "away" else ph
+        m = score_matrix(*fit_goals(r.fair, r.p_over25))
+        cut = 0.02 if r.p_over25 is not None else 0.04
+
+        def P(cond):
+            return sum(v for i, row in enumerate(m) for j, v in enumerate(row) if cond(i, j))
+
+        dog_goals = (lambda i, j: j) if dog_side == "away" else (lambda i, j: i)
+        fav_goals = (lambda i, j: i) if dog_side == "away" else (lambda i, j: j)
+        bp = r.best_prices or {}
+        dc_price = None
+        if dog_side in bp and "draw" in bp:  # doble oportunidad equivalente con las mejores cuotas
+            dc_price = 1 / (1 / bp[dog_side][0] + 1 / bp["draw"][0])
+        options = [
+            ("1X2", f"Gana {dog}", p_win, bp.get(dog_side, (None,))[0]),
+            ("Doble oportunidad", f"{dog} o empate", p_win + pd, dc_price),
+            ("Hándicap", f"{dog} +1.5 (no pierde por 2 o más)",
+             P(lambda i, j: dog_goals(i, j) - fav_goals(i, j) >= -1) - cut, None),
+            (f"Total goles {dog}", f"{dog} más de 0.5 goles", P(lambda i, j: dog_goals(i, j) >= 1) - cut, None),
+        ]
+        best = None
+        for market, sel, prob, price in options:
+            if not (0 < prob < 1) or prob < cfg["DOG_MIN_PROB"] or 1 / prob < cfg["DOG_MIN_ODDS"]:
+                continue
+            ev = price * prob - 1 if price else None
+            leg = Leg(r.event_id, r.league, r.kickoff, r.home, r.away, market, sel, prob,
+                      "mercado" if market in ("1X2", "Doble oportunidad") else "modelo")
+            cand = {"leg": leg, "market_odds": price, "ev": ev}
+            key = (ev is not None and ev >= 0.02, ev or 0, 1 / prob)
+            if best is None or key > best[0]:
+                best = (key, cand)
+        if best:
+            out.append(best[1])
+    out.sort(key=lambda c: (c["ev"] is not None and c["ev"] >= 0.02, c["ev"] or 0, c["leg"].min_odds), reverse=True)
+    return out[: cfg["DOG_MAX"]]
+
+
+def underdog_lines(reviews: list[MatchReview], cfg: dict) -> list[str]:
+    picks = underdog_picks(reviews, cfg)
+    if not picks:
+        return []
+    e = html.escape
+    cur = e(cfg.get("CURRENCY", "$"))
+    stake = cfg.get("STAKE_AMOUNT") or cfg["PARLAY_STAKE"]
+    lines = ["", "<b>🐺 NO FAVORITOS CON RESPALDO</b>",
+             "El público carga el dinero al favorito y las casas le bajan su pago; aquí el no favorito "
+             "tiene buena probabilidad y paga más."]
+    for c in picks:
+        lg = c["leg"]
+        tag = "" if lg.source == "mercado" else " ·est."
+        lines += ["",
+                  f"• <b>{e(lg.selection)}</b> — mín. {odds_txt(lg.min_odds)} ({lg.prob * 100:.0f}%{tag})",
+                  f"   {e(lg.home)} vs {e(lg.away)} · {lg.kickoff.strftime('%d/%m %H:%M')} · {e(lg.league)} · {e(lg.market)}",
+                  f"   💵 Con {cur}{stake:.0f} ganas ≥ {cur}{stake * (lg.min_odds - 1):.2f}"]
+        if c["market_odds"]:
+            if c["ev"] is not None and c["ev"] >= 0.02:
+                lines.append(f"   ⭐ Casas europeas ya pagan hasta {american(c['market_odds'])}: "
+                             f"valor {pct(c['ev'])} sobre la probabilidad real")
+            else:
+                lines.append(f"   Mejor pago en Europa: {american(c['market_odds'])} (sin valor extra; "
+                             f"busca que {e(cfg['MAIN_BOOK'])} pague más que el mínimo)")
+    lines.append("<i>Pagan más porque fallan más seguido que un favorito: úsalos como sencillas o "
+                 "como 1 selección dentro de una doble, no varios juntos.</i>")
+    return lines
+
+
 def american(decimal_odds: float) -> str:
     """Convierte cuota decimal a momio americano (+150, -250...)."""
     if decimal_odds <= 1.0:
@@ -926,6 +1012,7 @@ def build_safe_report(reviews: list[MatchReview], picks: list[Pick], cfg: dict, 
         lines.append(f"❌ Hoy no hay sencillas con ≥{cfg['SAFE_MIN_PROB'] * 100:.0f}% de probabilidad "
                      f"que paguen al menos {cfg['SAFE_MIN_ODDS']:.2f}.")
     lines += parlay_lines(reviews, cfg)
+    lines += underdog_lines(reviews, cfg)
 
     rest = [r for r in reviews if not r.picks]
     if rest:
