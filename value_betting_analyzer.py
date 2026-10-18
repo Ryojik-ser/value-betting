@@ -449,13 +449,25 @@ def discover_chat_id(token: str) -> str:
     return ""
 
 
+def chat_id_file(cfg: dict) -> Path:
+    return Path(cfg["HISTORY_FILE"]).parent / "telegram_chat_id.txt"
+
+
 def send_telegram(text: str, cfg: dict) -> None:
     token, chat = cfg["TELEGRAM_TOKEN"], cfg["TELEGRAM_CHAT_ID"]
+    saved = chat_id_file(cfg)
+    if token and not chat and saved.exists():
+        chat = saved.read_text(encoding="utf-8").strip()
     if token and not chat:
+        # Telegram solo guarda los mensajes 24 h: se detecta una vez y se guarda.
         chat = discover_chat_id(token)
         if chat:
-            print(f"ℹ️  Chat ID detectado: {chat} (guárdalo como TELEGRAM_CHAT_ID)")
-    if not token or not chat:
+            saved.parent.mkdir(parents=True, exist_ok=True)
+            saved.write_text(chat, encoding="utf-8")
+            print(f"ℹ️  Chat ID detectado y guardado en {saved.name}.")
+    if not token:
+        raise RuntimeError("Falta TELEGRAM_TOKEN.")
+    if not chat:
         raise RuntimeError("El token de Telegram es válido, pero tu bot aún no tiene mensajes. Abre "
                            "t.me/ClaudepuestasEVbot, pulsa Iniciar, escribe 'hola' y vuelve a ejecutar.")
     for chunk in split_message(text):
