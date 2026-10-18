@@ -1,0 +1,11 @@
+date,event_id,sport_key,league,kickoff,home,away,outcome,selection,odds,bookmaker,fair_prob,ev,stake,status,profit,kind
+2026-10-18,096d800bcc95c547ef592cbef624d080,soccer_germany_bundesliga,Bundesliga,2026-10-18T07:30:00-06:00,Bayer Leverkusen,SC Freiburg,home_draw,Bayer Leverkusen o empate,1.25,BetMéxico (cuota mínima),0.8001,0.0000,20.00,pendiente,,seguro
+2026-10-18,367da93aa21a1e13eeafb94fd2263c75,soccer_italy_serie_a,Serie A,2026-10-18T04:30:00-06:00,Udinese,Lecce,home_draw,Udinese o empate,1.26,BetMéxico (cuota mínima),0.7954,0.0000,20.00,pendiente,,seguro
+2026-10-18,f9403dd597edbfaa73abdc974e55344c,soccer_italy_serie_a,Serie A,2026-10-18T10:00:00-06:00,AC Milan,Atalanta BC,home_draw,AC Milan o empate,1.28,BetMéxico (cuota mínima),0.7815,0.0000,20.00,pendiente,,seguro
+2026-10-18,eccd63bf768e2f2a358b871d3f33a63d,soccer_spain_la_liga,La Liga,2026-10-18T13:00:00-06:00,Real Madrid,Sevilla,home,Real Madrid,1.29,BetMéxico (cuota mínima),0.7760,0.0000,20.00,pendiente,,seguro
+2026-10-18,1f566f17c50fe5162724ec2863d2207b,soccer_spain_la_liga,La Liga,2026-10-18T06:00:00-06:00,CA Osasuna,Real Racing Club de Santander,home_draw,CA Osasuna o empate,1.35,BetMéxico (cuota mínima),0.7393,0.0000,20.00,pendiente,,seguro
+2026-10-18,dfd5d6648be46426e418801584d46a68,soccer_epl,Premier League,2026-10-18T07:00:00-06:00,Bournemouth,Sunderland,home_draw,Bournemouth o empate,1.37,BetMéxico (cuota mínima),0.7293,0.0000,20.00,pendiente,,seguro
+2026-10-18,3ea32a0aa44a5f0ef7fd088155430087,soccer_italy_serie_a,Serie A,2026-10-18T07:00:00-06:00,Fiorentina,Como,away_draw,Como o empate,1.37,BetMéxico (cuota mínima),0.7289,0.0000,20.00,pendiente,,seguro
+2026-10-18,aabe899ecc4c19a1fafe5440151b62e4,soccer_spain_la_liga,La Liga,2026-10-18T08:15:00-06:00,Celta Vigo,Alavés,home_draw,Celta Vigo o empate,1.38,BetMéxico (cuota mínima),0.7236,0.0000,20.00,pendiente,,seguro
+2026-10-18,1051298b4aca6f07113309bff598a5c1,soccer_spain_la_liga,La Liga,2026-10-18T10:30:00-06:00,Málaga,Real Sociedad,away_draw,Real Sociedad o empate,1.39,BetMéxico (cuota mínima),0.7169,0.0000,20.00,pendiente,,seguro
+2026-10-18,fd9b8c185737a15615aa0c9daaa3dfbf,soccer_germany_bundesliga,Bundesliga,2026-10-18T09:30:00-06:00,Borussia Monchengladbach,TSG Hoffenheim,away_draw,TSG Hoffenheim o empate,1.44,BetMéxico (cuota mínima),0.6950,0.0000,20.00,pendiente,,seguro
