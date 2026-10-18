@@ -130,6 +130,10 @@ def load_config() -> dict:
         cfg[k] = re.sub(r"\s+", "", str(cfg.get(k, "") or "")).strip("\"'")
         if cfg[k].startswith(PLACEHOLDER_PREFIX):
             cfg[k] = ""
+    # Las claves de The Odds-API son hexadecimales en minúscula; el teclado del celular
+    # a veces pone mayúsculas al pegar.
+    if re.fullmatch(r"[0-9a-fA-F]+", cfg["ODDS_API_KEY"]):
+        cfg["ODDS_API_KEY"] = cfg["ODDS_API_KEY"].lower()
     hist = Path(cfg["HISTORY_FILE"])
     cfg["HISTORY_FILE"] = str(hist if hist.is_absolute() else BASE_DIR / hist)
     return cfg
