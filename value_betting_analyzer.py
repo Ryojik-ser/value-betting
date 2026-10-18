@@ -951,9 +951,19 @@ def _pmf(lam: float, n: int = 10) -> list[float]:
     return _PMF_CACHE[key]
 
 
-def score_matrix(lh: float, la: float) -> list[list[float]]:
+def score_matrix(lh: float, la: float, rho: float = 0.0) -> list[list[float]]:
+    """Probabilidad de cada marcador. rho es el ajuste Dixon-Coles: corrige que el Poisson
+    simple subestima los marcadores bajos (0-0, 1-1) y sobreestima 1-0 / 0-1."""
     ph, pa = _pmf(lh), _pmf(la)
-    return [[x * y for y in pa] for x in ph]
+    m = [[x * y for y in pa] for x in ph]
+    if rho:
+        m[0][0] *= max(0.0, 1 - lh * la * rho)
+        m[0][1] *= max(0.0, 1 + lh * rho)
+        m[1][0] *= max(0.0, 1 + la * rho)
+        m[1][1] *= max(0.0, 1 - rho)
+        total = sum(map(sum, m))
+        m = [[v / total for v in row] for row in m]
+    return m
 
 
 def _summary(m: list[list[float]]) -> tuple[float, float, float, float]:
@@ -971,18 +981,31 @@ def _summary(m: list[list[float]]) -> tuple[float, float, float, float]:
     return home, draw, away, over
 
 
-def fit_goals(fair: list[float], p_over25: float | None) -> tuple[float, float]:
-    """Goles esperados (local, visitante) que mejor reproducen las cuotas del mercado."""
-    def err(lh, la):
-        h, d, a, o = _summary(score_matrix(lh, la))
+_FIT_CACHE: dict = {}
+DC_RHO_DEFAULT = -0.08   # valor típico en fútbol europeo
+
+
+def fit_goals(fair: list[float], p_over25: float | None) -> tuple[float, float, float]:
+    """Goles esperados (local, visitante) y rho de Dixon-Coles que mejor reproducen
+    las cuotas del mercado (1X2 y, si hay, más/menos de 2.5)."""
+    key = (tuple(round(x, 5) for x in fair), None if p_over25 is None else round(p_over25, 5))
+    if key in _FIT_CACHE:
+        return _FIT_CACHE[key]
+
+    def err(lh, la, rho):
+        h, d, a, o = _summary(score_matrix(lh, la, rho))
         e = (h - fair[0]) ** 2 + (d - fair[1]) ** 2 + (a - fair[2]) ** 2
-        return e + ((o - p_over25) ** 2 if p_over25 is not None else 0.0)
+        e += (o - p_over25) ** 2 if p_over25 is not None else 0.0
+        return e + 0.02 * (rho - DC_RHO_DEFAULT) ** 2  # rho cerca de lo típico salvo que el mercado diga otra cosa
 
     grid = [x / 10 for x in range(2, 40)]
-    lh, la = min(((x, y) for x in grid for y in grid), key=lambda t: err(*t))
+    lh, la = min(((x, y) for x in grid for y in grid), key=lambda t: err(*t, DC_RHO_DEFAULT))
     fine = [d / 50 for d in range(-5, 6)]
-    lh, la = min(((max(0.05, lh + dx), max(0.05, la + dy)) for dx in fine for dy in fine), key=lambda t: err(*t))
-    return lh, la
+    rhos = [r / 100 for r in range(-20, 6, 3)]
+    best = min(((max(0.05, lh + dx), max(0.05, la + dy), r) for dx in fine for dy in fine for r in rhos),
+               key=lambda t: err(*t))
+    _FIT_CACHE[key] = best
+    return best
 
 
 def market_legs(review: MatchReview, cfg: dict) -> list[Leg]:
@@ -1121,8 +1144,8 @@ def focus_analysis(review: MatchReview, cfg: dict, props: list[tuple[float, str]
     share = cfg["FOCUS_PLAYER_SHARE"]
     if season and season["team_goals"] >= 5:
         share = min(0.6, max(0.1, season["goals"] / season["team_goals"]))
-    lh, la = fit_goals(review.fair, review.p_over25)
-    m = score_matrix(lh, la)
+    lh, la, rho = fit_goals(review.fair, review.p_over25)
+    m = score_matrix(lh, la, rho)
     cut = 0.02 if review.p_over25 is not None else 0.04
 
     def tg(i, j):

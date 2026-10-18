@@ -250,3 +250,12 @@ def test_afternoon_run_does_not_record(tmp_path, monkeypatch):
     report = vba.strip_html(vba.run(c, telegram=False))
     assert "ACTUALIZACIÓN DE LA TARDE" in report
     assert not vba.read_bets(vba.bets_file(c)) and not vba.read_history(c["HISTORY_FILE"])
+
+
+def test_dixon_coles_matches_draws_better_than_plain_poisson():
+    fair, po = [0.30, 0.32, 0.38], 0.40
+    lh, la, rho = vba.fit_goals(fair, po)
+    d_dc = vba._summary(vba.score_matrix(lh, la, rho))[1]
+    assert rho < 0 and abs(d_dc - fair[1]) < 0.01
+    m = vba.score_matrix(lh, la, rho)
+    assert abs(sum(map(sum, m)) - 1) < 1e-9

@@ -24,7 +24,7 @@ The Odds-API no tiene cuotas de casas mexicanas (BetMéxico, Caliente, Codere MX
 - Todo se muestra en **momio americano** (como en BetMéxico) con la cuota decimal entre paréntesis. Ejemplo: `-296 (1.34)`. Un momio **paga más** cuanto más cerca de cero esté si es negativo (-250 paga más que -300) o cuanto más alto si es positivo.
 - **🎰 Parlays sugeridas** (una selección por partido, de 2 a 3 selecciones):
   - Mercados: ganador (1X2), doble oportunidad, total de goles (más de 1.5 / menos de 3.5 / 2.5), ambos anotan, goles de un equipo y "Crear apuesta" (gana + más de 1.5 goles).
-  - Las probabilidades de goles salen de un **modelo de Poisson calibrado con las cuotas del mercado** (Pinnacle + consenso), con un recorte prudente. Se marcan como «est.».
+  - Las probabilidades de goles salen de un **modelo de Poisson con ajuste **Dixon-Coles** (corrige los marcadores bajos 0-0, 1-0, 1-1) calibrado con las cuotas del mercado** (Pinnacle + consenso), con un recorte prudente. Se marcan como «est.».
   - Objetivos: 🛡️ *doble más segura*, 💵 *doblar tu dinero (≥ +100)* y 🚀 *estilo ticket (≥ +145)*. Para cada objetivo elige la combinación con **menos selecciones**, porque cada selección extra suma margen de la casa.
   - Córners y remates a puerta **no** se incluyen: no hay datos gratuitos confiables.
 - Te dice la **probabilidad real de que salga completa**, el momio total mínimo y cuánto cobras con tu apuesta (`PARLAY_STAKE`, por defecto $5).
