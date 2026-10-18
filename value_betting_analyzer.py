@@ -438,6 +438,9 @@ def fetch_results_football_data(date_from: str, date_to: str, cfg: dict) -> list
 def discover_chat_id(token: str) -> str:
     """Si no hay Chat ID, lo saca del último mensaje que recibió el bot."""
     r = _requests().get(TELEGRAM_URL.format(token=token, method="getUpdates"), timeout=30)
+    if r.status_code in (401, 404):
+        raise RuntimeError("Telegram rechazó el token: revisa el secreto TELEGRAM_TOKEN (cópialo completo de "
+                           "@BotFather; distingue mayúsculas y minúsculas).")
     if r.ok:
         for upd in reversed(r.json().get("result", [])):
             chat = (upd.get("message") or upd.get("channel_post") or {}).get("chat")
@@ -453,8 +456,8 @@ def send_telegram(text: str, cfg: dict) -> None:
         if chat:
             print(f"ℹ️  Chat ID detectado: {chat} (guárdalo como TELEGRAM_CHAT_ID)")
     if not token or not chat:
-        raise RuntimeError("Falta TELEGRAM_TOKEN o no hay Chat ID. Escríbele cualquier mensaje a tu bot "
-                           "en Telegram y vuelve a ejecutar.")
+        raise RuntimeError("El token de Telegram es válido, pero tu bot aún no tiene mensajes. Abre "
+                           "t.me/ClaudepuestasEVbot, pulsa Iniciar, escribe 'hola' y vuelve a ejecutar.")
     for chunk in split_message(text):
         r = _requests().post(
             TELEGRAM_URL.format(token=token, method="sendMessage"),
