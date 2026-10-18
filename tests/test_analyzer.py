@@ -8,6 +8,7 @@ import value_betting_analyzer as vba  # noqa: E402
 
 def cfg(**kw):
     c = dict(vba.DEFAULTS)
+    c["MODE"] = "valor"
     c.update(kw)
     return c
 
@@ -61,3 +62,24 @@ def test_settlement_by_team_name(tmp_path):
 def test_split_message():
     chunks = vba.split_message("\n".join(["x" * 100] * 100), limit=1000)
     assert all(len(c) <= 1000 for c in chunks) and len(chunks) > 1
+
+
+def test_safe_mode_high_probability_picks():
+    report = vba.strip_html(vba.run(cfg(MODE="seguro"), demo=True, telegram=False))
+    assert "1X – Arsenal o empate" in report
+    assert "cuota mínima 1.34" in report
+    assert "1 – Inter" in report                                 # 1X pagaría < 1.20
+    assert report.index("Arsenal") < report.index("Inter")       # más probable primero
+
+
+def test_safe_mode_respects_min_prob():
+    report = vba.run(cfg(MODE="seguro", SAFE_MIN_PROB=0.9), demo=True, telegram=False)
+    assert "Picks: <b>0</b>" in report
+
+
+def test_double_chance_settlement():
+    rows = [{"event_id": "z", "kickoff": "2026-10-17T12:00:00+00:00", "home": "Arsenal", "away": "Chelsea",
+             "outcome": "home_draw", "odds": "1.34", "stake": "20", "status": "pendiente", "profit": ""}]
+    res = [{"id": "z", "home": "Arsenal", "away": "Chelsea", "home_goals": 1, "away_goals": 1, "date": "2026-10-17"}]
+    assert vba.settle_rows(rows, res) == 1
+    assert rows[0]["status"] == "ganada" and rows[0]["profit"] == "6.80"

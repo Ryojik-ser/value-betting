@@ -18,6 +18,8 @@ jobs:
       FOOTBALL_DATA_KEY: ${{ secrets.FOOTBALL_DATA_KEY }}
       BANKROLL: ${{ vars.BANKROLL }}
       MIN_EV: ${{ vars.MIN_EV }}
+      MODE: ${{ vars.MODE }}
+      SAFE_MIN_PROB: ${{ vars.SAFE_MIN_PROB }}
       HISTORY_FILE: data/picks_history.csv
     steps:
       - uses: actions/checkout@v4

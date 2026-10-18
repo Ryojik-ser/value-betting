@@ -62,6 +62,15 @@ DEFAULTS = {
         "soccer_uefa_champs_league": "Champions League",
         "soccer_uefa_europa_league": "Europa League",
     },
+    # Modo de trabajo:
+    #   "seguro" -> picks de ALTA PROBABILIDAD (favoritos y doble oportunidad) con la
+    #               cuota mínima que debes exigir en tu casa (BetMéxico).
+    #   "valor"  -> picks de valor esperado usando las cuotas de casas europeas.
+    "MODE": "seguro",
+    "MAIN_BOOK": "BetMéxico",     # tu casa principal (solo para el texto del informe)
+    "SAFE_MIN_PROB": 0.65,        # probabilidad mínima de acierto en modo seguro
+    "SAFE_MIN_ODDS": 1.20,        # descarta picks que pagarían menos de 1.20
+    "SAFE_STAKE_PCT": 0.02,       # stake fijo en modo seguro (2 % de la banca)
     "REGIONS": "eu",              # eu incluye Pinnacle; puedes usar "eu,uk"
     "HOURS_AHEAD": 24,            # ventana de partidos a analizar
     "MIN_EV": 0.02,               # EV mínimo (2 %). 0 = cualquier valor positivo
@@ -165,7 +174,10 @@ def kelly_stake(prob: float, odds: float, fraction: float, cap: float) -> float:
 # ---------------------------------------------------------------------------
 # Modelos
 # ---------------------------------------------------------------------------
-OUTCOME_LABEL = {"home": "1", "draw": "X", "away": "2"}
+OUTCOME_LABEL = {"home": "1", "draw": "X", "away": "2", "home_draw": "1X", "away_draw": "X2"}
+# Resultados del partido que hacen ganar cada apuesta
+WINNING_RESULTS = {"home": {"home"}, "draw": {"draw"}, "away": {"away"},
+                   "home_draw": {"home", "draw"}, "away_draw": {"away", "draw"}}
 
 
 @dataclass
@@ -187,6 +199,8 @@ class Pick:
     stake: float
     n_books: int
     source: str         # "Pinnacle+consenso" o "consenso"
+    min_odds: float = 0.0   # cuota mínima a exigir en tu casa (BetMéxico)
+    kind: str = "valor"     # "valor" o "seguro"
 
 
 @dataclass
@@ -195,8 +209,9 @@ class MatchReview:
     kickoff: datetime
     home: str
     away: str
-    status: str              # "valor", "sin valor", "datos insuficientes"
+    status: str              # "con pick", "sin pick", "datos insuficientes"
     best_ev: float | None = None
+    best_prob: float | None = None
     picks: list[Pick] = field(default_factory=list)
 
 
@@ -258,6 +273,17 @@ def analyze_event(event: dict, league: str, cfg: dict, tz) -> MatchReview:
         fair = consensus
         source = "consenso"
 
+    base = dict(event_id=event["id"], sport_key=event.get("sport_key", ""), league=league,
+                kickoff=kickoff, home=home, away=away, n_books=len(all_prices), source=source)
+
+    if cfg.get("MODE") == "seguro":
+        pick = safe_pick(fair, all_prices, titles, sharp, base, cfg)
+        if pick:
+            review.picks.append(pick)
+        review.best_prob = max(fair[0] + fair[1], fair[2] + fair[1])
+        review.status = "con pick" if review.picks else "sin pick"
+        return review
+
     allowed = {b.lower() for b in cfg.get("BOOKMAKERS") or []}
     names = {"home": home, "draw": "Empate", "away": away}
     best_ev = None
@@ -275,16 +301,45 @@ def analyze_event(event: dict, league: str, cfg: dict, tz) -> MatchReview:
             continue
         pct = kelly_stake(fair[i], price, cfg["KELLY_FRACTION"], cfg["MAX_STAKE_PCT"])
         review.picks.append(Pick(
-            event_id=event["id"], sport_key=event.get("sport_key", ""), league=league,
-            kickoff=kickoff, home=home, away=away, outcome=outcome, selection=names[outcome],
+            **base, outcome=outcome, selection=names[outcome],
             odds=price, bookmaker=titles[book], fair_prob=fair[i], fair_odds=1 / fair[i],
             ev=ev, stake_pct=pct, stake=round(pct * cfg["BANKROLL"], 2),
-            n_books=len(all_prices), source=source,
+            min_odds=(1 + cfg["MIN_EV"]) / fair[i],
         ))
 
     review.best_ev = best_ev
-    review.status = "valor" if review.picks else "sin valor"
+    review.status = "con pick" if review.picks else "sin pick"
     return review
+
+
+def safe_pick(fair: list[float], all_prices: dict, titles: dict, sharp: str, base: dict, cfg: dict) -> Pick | None:
+    """Elige, para un partido, la apuesta con más probabilidad de acierto que aún pague
+    al menos SAFE_MIN_ODDS: victoria simple (1 / 2) o doble oportunidad (1X / X2)."""
+    home, away = base["home"], base["away"]
+    p_home, p_draw, p_away = fair
+    options = [
+        ("home", p_home, home),
+        ("away", p_away, away),
+        ("home_draw", p_home + p_draw, f"{home} o empate"),
+        ("away_draw", p_away + p_draw, f"{away} o empate"),
+    ]
+    valid = [o for o in options if o[1] >= cfg["SAFE_MIN_PROB"] and 1 / o[1] >= cfg["SAFE_MIN_ODDS"]]
+    if not valid:
+        return None
+    outcome, prob, selection = max(valid, key=lambda o: o[1])
+    fair_odds = 1 / prob
+    ref_odds, ref_book = 0.0, ""
+    if outcome in ("home", "away"):  # referencia: mejor cuota europea para ese resultado
+        prices = [(p[outcome], k) for k, p in all_prices.items() if k != sharp]
+        if prices:
+            ref_odds, k = max(prices)
+            ref_book = titles[k]
+    pct_stake = cfg["SAFE_STAKE_PCT"]
+    return Pick(
+        **base, outcome=outcome, selection=selection, odds=ref_odds, bookmaker=ref_book,
+        fair_prob=prob, fair_odds=fair_odds, ev=0.0, stake_pct=pct_stake,
+        stake=round(pct_stake * cfg["BANKROLL"], 2), min_odds=fair_odds, kind="seguro",
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -357,10 +412,26 @@ def fetch_results_football_data(date_from: str, date_to: str, cfg: dict) -> list
     return out
 
 
+def discover_chat_id(token: str) -> str:
+    """Si no hay Chat ID, lo saca del último mensaje que recibió el bot."""
+    r = _requests().get(TELEGRAM_URL.format(token=token, method="getUpdates"), timeout=30)
+    if r.ok:
+        for upd in reversed(r.json().get("result", [])):
+            chat = (upd.get("message") or upd.get("channel_post") or {}).get("chat")
+            if chat:
+                return str(chat["id"])
+    return ""
+
+
 def send_telegram(text: str, cfg: dict) -> None:
     token, chat = cfg["TELEGRAM_TOKEN"], cfg["TELEGRAM_CHAT_ID"]
+    if token and not chat:
+        chat = discover_chat_id(token)
+        if chat:
+            print(f"ℹ️  Chat ID detectado: {chat} (guárdalo como TELEGRAM_CHAT_ID)")
     if not token or not chat:
-        raise RuntimeError("Falta TELEGRAM_TOKEN o TELEGRAM_CHAT_ID. Ejecuta: python setup.py")
+        raise RuntimeError("Falta TELEGRAM_TOKEN o no hay Chat ID. Escríbele cualquier mensaje a tu bot "
+                           "en Telegram y vuelve a ejecutar.")
     for chunk in split_message(text):
         r = _requests().post(
             TELEGRAM_URL.format(token=token, method="sendMessage"),
@@ -388,7 +459,7 @@ def split_message(text: str, limit: int = 4000) -> list[str]:
 # Historial y liquidación
 # ---------------------------------------------------------------------------
 HISTORY_FIELDS = ["date", "event_id", "sport_key", "league", "kickoff", "home", "away", "outcome",
-                  "selection", "odds", "bookmaker", "fair_prob", "ev", "stake", "status", "profit"]
+                  "selection", "odds", "bookmaker", "fair_prob", "ev", "stake", "status", "profit", "kind"]
 
 
 def read_history(path: str) -> list[dict]:
@@ -416,8 +487,10 @@ def record_picks(picks: list[Pick], path: str) -> int:
             "date": datetime.now(timezone.utc).strftime("%Y-%m-%d"), "event_id": p.event_id,
             "sport_key": p.sport_key, "league": p.league, "kickoff": p.kickoff.isoformat(),
             "home": p.home, "away": p.away, "outcome": p.outcome, "selection": p.selection,
-            "odds": f"{p.odds:.2f}", "bookmaker": p.bookmaker, "fair_prob": f"{p.fair_prob:.4f}",
-            "ev": f"{p.ev:.4f}", "stake": f"{p.stake:.2f}", "status": "pendiente", "profit": "",
+            # En modo seguro se registra la cuota mínima (estimación conservadora del beneficio).
+            "odds": f"{(p.min_odds if p.kind == 'seguro' else p.odds):.2f}",
+            "bookmaker": p.bookmaker if p.kind == "valor" else "BetMéxico (cuota mínima)", "fair_prob": f"{p.fair_prob:.4f}",
+            "ev": f"{p.ev:.4f}", "stake": f"{p.stake:.2f}", "status": "pendiente", "profit": "", "kind": p.kind,
         })
         added += 1
     write_history(path, rows)
@@ -460,7 +533,7 @@ def settle_rows(rows: list[dict], results: list[dict]) -> int:
         hg, ag = match["home_goals"], match["away_goals"]
         winner = "home" if hg > ag else "away" if ag > hg else "draw"
         stake = float(r["stake"] or 0) or 1.0
-        won = winner == r["outcome"]
+        won = winner in WINNING_RESULTS.get(r["outcome"], {r["outcome"]})
         r["status"] = "ganada" if won else "perdida"
         r["profit"] = f"{(stake * (float(r['odds']) - 1)) if won else -stake:.2f}"
         settled += 1
@@ -517,6 +590,8 @@ def pct(x: float) -> str:
 def build_report(reviews: list[MatchReview], picks: list[Pick], cfg: dict, stats: dict,
                  remaining: str | None, today: datetime) -> str:
     e = html.escape
+    if cfg.get("MODE") == "seguro":
+        return build_safe_report(reviews, picks, cfg, stats, remaining, today)
     lines = [f"<b>📊 Value Betting · {today.strftime('%d/%m/%Y')}</b>",
              f"Partidos revisados: <b>{len(reviews)}</b> · Picks con valor: <b>{len(picks)}</b>", ""]
 
@@ -530,18 +605,26 @@ def build_report(reviews: list[MatchReview], picks: list[Pick], cfg: dict, stats
                 f"🎯 <b>{OUTCOME_LABEL[p.outcome]} – {e(p.selection)}</b> @ <b>{p.odds:.2f}</b> ({e(p.bookmaker)})",
                 f"📈 EV {pct(p.ev)} · Prob. justa {p.fair_prob * 100:.1f}% · Cuota justa {p.fair_odds:.2f}",
                 f"💰 Stake: {p.stake_pct * 100:.1f}% de banca ≈ {p.stake:.2f} · {p.n_books} casas ({p.source})",
+                f"📱 En {e(cfg['MAIN_BOOK'])}: apuesta solo si la cuota es ≥ <b>{p.min_odds:.2f}</b>",
             ]
     else:
         lines.append("❌ Hoy no hay picks con valor suficiente. No apostar también es una decisión ganadora.")
 
-    no_value = [r for r in reviews if r.status != "valor"]
+    no_value = [r for r in reviews if not r.picks]
     if no_value:
         lines += ["", "<b>🔎 Revisados sin valor</b>"]
         for r in sorted(no_value, key=lambda r: r.kickoff):
             tag = f"mejor EV {pct(r.best_ev)}" if r.best_ev is not None else "pocas casas"
             lines.append(f"• {r.kickoff.strftime('%H:%M')} {e(r.home)} vs {e(r.away)} — {tag}")
 
-    lines += ["", "<b>📒 Historial</b>"]
+    lines += history_lines(stats, remaining)
+    lines += ["", "<i>El valor se mide a largo plazo (cientos de apuestas). Apuesta solo lo que puedas perder. +18</i>"]
+    return "\n".join(lines)
+
+
+def history_lines(stats: dict, remaining: str | None) -> list[str]:
+    e = html.escape
+    lines = ["", "<b>📒 Historial</b>"]
     if stats.get("n"):
         lines.append(
             f"{stats['n']} picks liquidados · Aciertos {stats['win_rate'] * 100:.1f}% "
@@ -552,7 +635,49 @@ def build_report(reviews: list[MatchReview], picks: list[Pick], cfg: dict, stats
         lines.append("Aún no hay picks liquidados.")
     if remaining is not None:
         lines.append(f"<i>Créditos The Odds-API restantes: {e(str(remaining))}</i>")
-    lines += ["", "<i>El valor se mide a largo plazo (cientos de apuestas). Apuesta solo lo que puedas perder. +18</i>"]
+    return lines
+
+
+def build_safe_report(reviews: list[MatchReview], picks: list[Pick], cfg: dict, stats: dict,
+                      remaining: str | None, today: datetime) -> str:
+    e = html.escape
+    book = e(cfg["MAIN_BOOK"])
+    lines = [f"<b>🛡️ Picks de alta probabilidad · {today.strftime('%d/%m/%Y')}</b>",
+             f"Partidos revisados: <b>{len(reviews)}</b> · Picks: <b>{len(picks)}</b>", ""]
+    if picks:
+        expected_misses = sum(1 - p.fair_prob for p in picks)
+        lines += [
+            f"De estos {len(picks)} picks, lo esperable es fallar ≈ <b>{expected_misses:.1f}</b>.",
+            f"Abre {book} y apuesta <b>solo</b> si su cuota es igual o mayor a la indicada; "
+            "si es menor, sáltalo (a la larga pierdes dinero).",
+        ]
+        for i, p in enumerate(picks, 1):
+            ref = f" · Mejor cuota en Europa: {p.odds:.2f} ({e(p.bookmaker)})" if p.odds else ""
+            lines += [
+                "",
+                f"<b>{i}. {e(p.home)} vs {e(p.away)}</b>",
+                f"🏆 {e(p.league)} · 🕒 {p.kickoff.strftime('%d/%m %H:%M')}",
+                f"🎯 <b>{OUTCOME_LABEL[p.outcome]} – {e(p.selection)}</b>"
+                + (" (doble oportunidad)" if "_" in p.outcome else ""),
+                f"✅ Probabilidad de acierto: <b>{p.fair_prob * 100:.0f}%</b>",
+                f"📱 En {book}: cuota mínima <b>{p.min_odds:.2f}</b>{ref}",
+                f"💰 Stake fijo: {p.stake_pct * 100:.0f}% de banca ≈ {p.stake:.2f}",
+            ]
+        lines += ["", "<i>Nunca los combines en un parlay: 5 picks al 75% aciertan juntos solo el 24% de las veces.</i>"]
+    else:
+        lines.append(f"❌ Hoy no hay partidos con ≥{cfg['SAFE_MIN_PROB'] * 100:.0f}% de probabilidad "
+                     f"que paguen al menos {cfg['SAFE_MIN_ODDS']:.2f}. Hoy no se apuesta.")
+
+    rest = [r for r in reviews if not r.picks]
+    if rest:
+        lines += ["", "<b>🔎 Revisados sin pick</b>"]
+        for r in sorted(rest, key=lambda r: r.kickoff):
+            tag = f"máx. {r.best_prob * 100:.0f}% (1X/X2)" if r.best_prob is not None else "pocas casas"
+            lines.append(f"• {r.kickoff.strftime('%H:%M')} {e(r.home)} vs {e(r.away)} — {tag}")
+
+    lines += history_lines(stats, remaining)
+    lines += ["", "<i>Alta probabilidad no es certeza: una derrota a cuota 1.40 borra 2.5 aciertos. "
+              "Apuesta solo lo que puedas perder. +18</i>"]
     return "\n".join(lines)
 
 
@@ -599,7 +724,7 @@ def run(cfg: dict, demo: bool = False, telegram: bool = True) -> str:
 
     if not demo:
         if not cfg["ODDS_API_KEY"]:
-            raise RuntimeError("Falta ODDS_API_KEY. Ejecuta: python setup.py")
+            raise RuntimeError("Falta ODDS_API_KEY (ponla como secreto en GitHub o ejecuta setup.py).")
         try:
             n = settle_pending(cfg)
             if n:
@@ -629,7 +754,8 @@ def run(cfg: dict, demo: bool = False, telegram: bool = True) -> str:
             review = analyze_event(event, league, cfg, tz)
             reviews.append(review)
 
-    picks = sorted((p for r in reviews for p in r.picks), key=lambda p: p.ev, reverse=True)[: cfg["MAX_PICKS"]]
+    sort_key = (lambda p: p.fair_prob) if cfg.get("MODE") == "seguro" else (lambda p: p.ev)
+    picks = sorted((p for r in reviews for p in r.picks), key=sort_key, reverse=True)[: cfg["MAX_PICKS"]]
 
     if not demo:
         record_picks(picks, cfg["HISTORY_FILE"])
@@ -651,12 +777,15 @@ def main() -> None:
     parser.add_argument("--demo", action="store_true", help="usar datos de ejemplo (sin APIs)")
     parser.add_argument("--no-telegram", action="store_true", help="no enviar a Telegram, solo mostrar")
     parser.add_argument("--stats", action="store_true", help="mostrar estadísticas del historial")
+    parser.add_argument("--modo", choices=["seguro", "valor"], help="forzar modo para esta ejecución")
     args = parser.parse_args()
 
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
     cfg = load_config()
+    if args.modo:
+        cfg["MODE"] = args.modo
     if args.stats:
         s = history_stats(cfg["HISTORY_FILE"])
         if not s["n"]:
