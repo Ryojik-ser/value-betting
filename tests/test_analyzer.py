@@ -170,3 +170,8 @@ def test_focus_season_share():
     fa = vba.focus_analysis(city, c, season={"goals": 12, "played": 8, "penalties": 2,
                                               "team_goals": 24, "team_played": 8, "position": 1})
     assert abs(fa["share"] - 0.5) < 1e-9
+
+
+def test_focus_section_only_on_match_day():
+    report = vba.strip_html(vba.run(cfg(MODE="seguro", HOURS_AHEAD=3), demo=True, telegram=False))
+    assert "APARTADO MANCHESTER CITY" not in report   # el City juega dentro de 11 h, fuera de la ventana

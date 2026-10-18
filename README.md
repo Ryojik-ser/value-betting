@@ -42,7 +42,7 @@ El público apuesta sobre todo al favorito o al equipo popular (América, Chivas
 
 ### 🩵 Apartado Manchester City · Haaland
 
-Sale **arriba de todo** en cada informe: el partido del City de hoy o, si no juega, el próximo (hasta 7 días).
+Sale **arriba de todo**, pero **solo el día en que juega el City** (partidos dentro del informe del día). Si no juega, no aparece.
 
 - Probabilidades de City / empate / rival y goles esperados.
 - Picks del City: gana, gana o empata, más de 1.5 goles, gana + más de 1.5, no recibe gol.

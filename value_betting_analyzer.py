@@ -90,7 +90,6 @@ DEFAULTS = {
     "FOCUS_PLAYER": "Erling Haaland",
     "FOCUS_PLAYER_SHARE": 0.33,   # parte de los goles del equipo que anota (se recalcula con football-data)
     "FOCUS_PROPS": True,          # descargar momios de goleador (≈2 créditos por partido del equipo)
-    "FOCUS_DAYS": 7,              # muestra el próximo partido aunque falten hasta 7 días
     "MARKETS": "h2h,totals",      # mercados a descargar (ganador + total de goles)
     "CURRENCY": "$",
     "REGIONS": "eu",              # eu incluye Pinnacle; puedes usar "eu,uk"
@@ -1037,19 +1036,18 @@ def focus_analysis(review: MatchReview, cfg: dict, props: list[tuple[float, str]
             "picks": [(mk, sel, p, src) for mk, sel, p, src in picks if 0 < p < 1]}
 
 
-def focus_lines(fa: dict | None, cfg: dict, next_only: bool = False) -> list[str]:
+def focus_lines(fa: dict | None, cfg: dict) -> list[str]:
     e = html.escape
     team, player = cfg["FOCUS_TEAM"], cfg["FOCUS_PLAYER"]
     if not fa:
-        return ["", f"<b>🩵 APARTADO {e(team.upper())}</b>",
-                f"No hay partido del {e(team)} con momios en los próximos {cfg['FOCUS_DAYS']} días."]
+        return []
     r = fa["review"]
     cur = e(cfg.get("CURRENCY", "$"))
     stake = cfg.get("STAKE_AMOUNT") or cfg["PARLAY_STAKE"]
     ph, pd, pa = r.fair
     p_team, p_riv = (ph, pa) if fa["home"] else (pa, ph)
     lines = ["", f"<b>🩵 APARTADO {e(team.upper())} · {e(player.upper())}</b>",
-             f"{'📅 Próximo partido' if next_only else '⚽ Hoy'}: <b>{e(r.home)} vs {e(r.away)}</b> · "
+             f"⚽ Hoy juega: <b>{e(r.home)} vs {e(r.away)}</b> · "
              f"{r.kickoff.strftime('%d/%m %H:%M')} · {e(r.league)}",
              f"📊 {e(team)} {p_team * 100:.0f}% · empate {pd * 100:.0f}% · {e(fa['rival'])} {p_riv * 100:.0f}%",
              f"⚽ Goles esperados: {e(team)} {fa['xg'][0]:.1f} – {fa['xg'][1]:.1f} {e(fa['rival'])}"]
@@ -1283,7 +1281,6 @@ def run(cfg: dict, demo: bool = False, telegram: bool = True) -> str:
 
     reviews: list[MatchReview] = []
     focus_event = None  # (kickoff, event, league)
-    focus_limit = now + timedelta(days=cfg.get("FOCUS_DAYS", 7))
     remaining = None
     data = demo_events() if demo else None
     for sport_key, league in cfg["LEAGUES"].items():
@@ -1301,7 +1298,7 @@ def run(cfg: dict, demo: bool = False, telegram: bool = True) -> str:
             ko = datetime.fromisoformat(event["commence_time"].replace("Z", "+00:00"))
             event.setdefault("sport_key", sport_key)
             team = cfg.get("FOCUS_TEAM")
-            if team and now <= ko <= focus_limit and (_same_team(event["home_team"], team)
+            if team and now <= ko <= horizon and (_same_team(event["home_team"], team)
                                                       or _same_team(event["away_team"], team)):
                 if focus_event is None or ko < focus_event[0]:
                     focus_event = (ko, event, league)
@@ -1337,9 +1334,7 @@ def run(cfg: dict, demo: bool = False, telegram: bool = True) -> str:
                     print(f"⚠️  No se pudieron descargar momios de goleador: {exc}")
             season = None if demo else fetch_player_season(cfg)
             fa = focus_analysis(fr, cfg, props, season)
-            focus = focus_lines(fa, cfg, next_only=ko > horizon)
-        else:
-            focus = focus_lines(None, cfg)
+            focus = focus_lines(fa, cfg)  # solo el día en que juega el equipo
 
     report = build_report(reviews, picks, cfg, stats, remaining, now.astimezone(tz), focus)
 
