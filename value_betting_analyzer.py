@@ -126,7 +126,9 @@ def load_config() -> dict:
         else:
             cfg[key] = env
     for k in ("TELEGRAM_TOKEN", "TELEGRAM_CHAT_ID", "FOOTBALL_DATA_KEY", "ODDS_API_KEY"):
-        if str(cfg.get(k, "")).startswith(PLACEHOLDER_PREFIX):
+        # Quita espacios, saltos de línea y comillas que se cuelan al copiar desde el celular.
+        cfg[k] = re.sub(r"\s+", "", str(cfg.get(k, "") or "")).strip("\"'")
+        if cfg[k].startswith(PLACEHOLDER_PREFIX):
             cfg[k] = ""
     hist = Path(cfg["HISTORY_FILE"])
     cfg["HISTORY_FILE"] = str(hist if hist.is_absolute() else BASE_DIR / hist)
@@ -364,7 +366,9 @@ def fetch_odds(sport_key: str, cfg: dict) -> tuple[list[dict], str | None]:
     if r.status_code == 404:
         return [], r.headers.get("x-requests-remaining")
     if r.status_code == 401:
-        raise RuntimeError("API Key de The Odds-API inválida.")
+        n = len(cfg["ODDS_API_KEY"])
+        raise RuntimeError(f"The Odds-API rechazó la API Key (tiene {n} caracteres; debe tener 32). "
+                           "Vuelve a copiarla completa del correo y actualiza el secreto ODDS_API_KEY.")
     if r.status_code == 429:
         raise RuntimeError("Cuota de The Odds-API agotada este mes.")
     r.raise_for_status()
