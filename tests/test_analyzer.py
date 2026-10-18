@@ -238,3 +238,15 @@ def test_leagues_without_games_cost_nothing(tmp_path, monkeypatch):
     monkeypatch.setattr(vba, "fetch_odds", lambda sk, cf: (called.append(sk), ([], "400"))[1])
     vba.run(c, telegram=False)
     assert called == ["soccer_epl"]
+
+
+def test_afternoon_run_does_not_record(tmp_path, monkeypatch):
+    c = vba.load_config()
+    c.update(MODE="seguro", ODDS_API_KEY="x", HISTORY_FILE=str(tmp_path / "h.csv"), RUN_KIND="tarde")
+    data = vba.demo_events()
+    monkeypatch.setattr(vba, "fetch_odds", lambda sk, cf: (data.get(sk, []), "400"))
+    monkeypatch.setattr(vba, "has_events", lambda *a: True)
+    monkeypatch.setattr(vba, "fetch_player_props", lambda *a: [])
+    report = vba.strip_html(vba.run(c, telegram=False))
+    assert "ACTUALIZACIÓN DE LA TARDE" in report
+    assert not vba.read_bets(vba.bets_file(c)) and not vba.read_history(c["HISTORY_FILE"])

@@ -94,6 +94,7 @@ DEFAULTS = {
     "CURRENCY": "$",
     "REGIONS": "eu",              # eu incluye Pinnacle; puedes usar "eu,uk"
     "HOURS_AHEAD": 24,            # ventana de partidos a analizar
+    "RUN_KIND": "manana",         # "manana" (oficial, registra picks) o "tarde" (actualización, no registra)
     "MIN_EV": 0.02,               # EV mínimo (2 %). 0 = cualquier valor positivo
     "MAX_PICKS": 5,               # picks sencillos máximos por día
     "MIN_ODDS": 1.40,             # evita cuotas demasiado bajas
@@ -1404,7 +1405,7 @@ def build_safe_report(reviews: list[MatchReview], picks: list[Pick], cfg: dict, 
     n_dog = len(underdog_picks(reviews, cfg))
     stake = cfg.get("STAKE_AMOUNT") or cfg["PARLAY_STAKE"]
     header = "\n".join([
-        "📊 <b>APUESTAS DEL DÍA</b>",
+        "🌆 <b>ACTUALIZACIÓN DE LA TARDE</b>" if cfg.get("RUN_KIND") == "tarde" else "📊 <b>APUESTAS DEL DÍA</b>",
         f"<i>{date_es(today)} · {e(cfg['MAIN_BOOK'])} · {money(stake, cfg)} por apuesta</i>",
         "",
         f"🔎 {len(reviews)} partidos revisados",
@@ -1466,6 +1467,9 @@ def demo_events() -> dict[str, list[dict]]:
 # Programa principal
 # ---------------------------------------------------------------------------
 def run(cfg: dict, demo: bool = False, telegram: bool = True) -> str:
+    afternoon = cfg.get("RUN_KIND") == "tarde"
+    if afternoon:  # 2 p.m. → 8 a.m.: partidos de la tarde-noche con momios más frescos
+        cfg = {**cfg, "HOURS_AHEAD": min(cfg["HOURS_AHEAD"], 18)}
     tz = get_tz(cfg["TIMEZONE"])
     now = datetime.now(timezone.utc)
     horizon = now + timedelta(hours=cfg["HOURS_AHEAD"])
@@ -1520,7 +1524,8 @@ def run(cfg: dict, demo: bool = False, telegram: bool = True) -> str:
             return p.ev
     picks = sorted((p for r in reviews for p in r.picks), key=sort_key, reverse=True)[: cfg["MAX_PICKS"]]
 
-    if not demo:
+    record = not demo and not afternoon  # la tarde no registra: el historial mide el informe oficial
+    if record:
         record_picks(picks, cfg["HISTORY_FILE"])
     stats = history_stats(cfg["HISTORY_FILE"]) if not demo else {"n": 0}
     unit = cfg.get("STAKE_AMOUNT") or cfg["PARLAY_STAKE"]
@@ -1551,7 +1556,7 @@ def run(cfg: dict, demo: bool = False, telegram: bool = True) -> str:
                                  fr.sport_key)
                         bets.append({"kind": "city", "legs": [lg], "prob": p, "odds": 1 / p, "stake": unit})
 
-    if not demo:
+    if record:
         record_bets(bets, bets_file(cfg))
     cfg = {**cfg, "_bstats": {} if demo else bets_stats(bets_file(cfg))}
 

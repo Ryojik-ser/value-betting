@@ -103,7 +103,7 @@ Todo se hace desde el navegador y Telegram del teléfono. El sistema corre grati
    - `MODE` → `seguro`
 
 **e) Probar**
-*Actions → Informe diario de apuestas de valor → Run workflow*. En 1 minuto te llega el informe a Telegram. Desde entonces corre solo cada día a las **08:07 (CDMX)**.
+*Actions → Informe diario de apuestas de valor → Run workflow*. En 1 minuto te llega el informe a Telegram. Desde entonces corre solo cada día a las **08:07 (CDMX)** (informe oficial) y a las **14:07** (🌆 actualización de la tarde: partidos de la tarde-noche, como la Liga MX, con momios más frescos; no se registra en el historial para no contar doble).
 
 > El primer informe te muestra tu Chat ID en el registro de Actions. Guárdalo como secreto `TELEGRAM_CHAT_ID` para no depender de la detección automática.
 
