@@ -72,7 +72,8 @@ DEFAULTS = {
     "SAFE_MIN_ODDS": 1.20,        # descarta picks que pagarían menos de 1.20
     "SAFE_STAKE_PCT": 0.02,       # stake fijo en modo seguro (2 % de la banca)
     # Parlays sugeridas (se arman con los picks de alta probabilidad del día)
-    "PARLAY_STAKE": 15.0,         # cuánto pondrías en cada parlay
+    "STAKE_AMOUNT": 5.0,          # monto fijo por apuesta sencilla (0 = usar SAFE_STAKE_PCT)
+    "PARLAY_STAKE": 5.0,          # cuánto pondrías en cada parlay
     "PARLAY_MAX_LEGS": 3,         # máximo de selecciones por parlay
     "PARLAY_MIN_PROB": 0.40,      # no sugerir parlays con menos de 40 % de probabilidad
     "CURRENCY": "$",
@@ -345,11 +346,17 @@ def safe_pick(fair: list[float], all_prices: dict, titles: dict, sharp: str, bas
         if prices:
             ref_odds, k = max(prices)
             ref_book = titles[k]
-    pct_stake = cfg["SAFE_STAKE_PCT"]
+    amount = cfg.get("STAKE_AMOUNT") or 0
+    if amount > 0:
+        stake = float(amount)
+        pct_stake = stake / cfg["BANKROLL"] if cfg["BANKROLL"] else 0.0
+    else:
+        pct_stake = cfg["SAFE_STAKE_PCT"]
+        stake = round(pct_stake * cfg["BANKROLL"], 2)
     return Pick(
         **base, outcome=outcome, selection=selection, odds=ref_odds, bookmaker=ref_book,
         fair_prob=prob, fair_odds=fair_odds, ev=0.0, stake_pct=pct_stake,
-        stake=round(pct_stake * cfg["BANKROLL"], 2), min_odds=fair_odds, kind="seguro",
+        stake=stake, min_odds=fair_odds, kind="seguro",
     )
 
 

@@ -26,7 +26,7 @@ The Odds-API no tiene cuotas de casas mexicanas (BetMéxico, Caliente, Codere MX
   - 🛡️ *Doble más segura*: las 2 selecciones más probables.
   - ⚖️ *Triple equilibrada*: las 3 más probables, si juntas tienen ≥40 %.
   - 💰 *Mayor pago*: la combinación que más paga sin bajar de 40 % de probabilidad.
-- Te dice la **probabilidad real de que salga completa**, el momio total mínimo y cuánto cobras con tu apuesta (`PARLAY_STAKE`, por defecto $15).
+- Te dice la **probabilidad real de que salga completa**, el momio total mínimo y cuánto cobras con tu apuesta (`PARLAY_STAKE`, por defecto $5).
 - Cada selección tiene que cumplir su momio mínimo en BetMéxico; si no, el margen de la casa se multiplica en la parlay.
 
 ### Lo que debes saber
@@ -113,7 +113,8 @@ Desde el celular: como *Variables* en GitHub. En PC: dentro de `config.json`.
 | `MODE` | `seguro` | `seguro` (alta probabilidad) o `valor` (EV). |
 | `SAFE_MIN_PROB` | `0.65` | Probabilidad mínima de acierto en modo seguro. Súbela a `0.75` para picks más seguros (pagan menos). |
 | `SAFE_MIN_ODDS` | `1.20` | Descarta picks que pagarían menos de esto. |
-| `PARLAY_STAKE` | `15` | Cuánto apuestas por parlay (en pesos). |
+| `PARLAY_STAKE` | `5` | Cuánto apuestas por parlay (en pesos). |
+| `STAKE_AMOUNT` | `5` | Monto fijo por apuesta sencilla (`0` = usar `SAFE_STAKE_PCT`). |
 | `PARLAY_MIN_PROB` | `0.40` | Probabilidad mínima para sugerir una parlay. |
 | `SAFE_STAKE_PCT` | `0.02` | Stake fijo por pick en modo seguro (2 % de la banca). |
 | `MIN_EV` | `0.02` | EV mínimo. `0` = todo valor positivo (más picks, más ruido). |

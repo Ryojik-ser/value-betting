@@ -111,5 +111,5 @@ def test_parlays_respect_min_prob_and_stake():
     parlays = vba.build_parlays(picks, cfg(MODE="seguro"))
     assert parlays and all(p["prob"] >= 0.40 for p in parlays[1:])
     assert abs(parlays[0]["prob"] - picks[0].fair_prob * picks[1].fair_prob) < 1e-9
-    report = vba.strip_html(vba.run(cfg(MODE="seguro", BANKROLL=50), demo=True, telegram=False))
+    report = vba.strip_html(vba.run(cfg(MODE="seguro", BANKROLL=50, PARLAY_STAKE=15), demo=True, telegram=False))
     assert "PARLAYS SUGERIDAS" in report and "30% de tu banca" in report
