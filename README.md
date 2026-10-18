@@ -1,6 +1,6 @@
 # Value Betting Analyzer
 
-Sistema automático que cada mañana revisa los partidos de **Premier League, La Liga, Serie A, Bundesliga, Champions y Europa League**, elige los picks con **más probabilidad de acierto** (o con valor esperado positivo) y te envía el informe a **Telegram**, con la cuota mínima que debes exigir en **BetMéxico**. Se configura y funciona 100 % desde el celular.
+Sistema automático que cada mañana revisa los partidos de **Premier League, La Liga, Serie A, Bundesliga, Champions, Europa League y Liga MX**, elige los picks con **más probabilidad de acierto** (o con valor esperado positivo) y te envía el informe a **Telegram**, con la cuota mínima que debes exigir en **BetMéxico**. Se configura y funciona 100 % desde el celular.
 
 ## Dos modos
 
@@ -28,7 +28,7 @@ The Odds-API no tiene cuotas de casas mexicanas (BetMéxico, Caliente, Codere MX
   - Objetivos: 🛡️ *doble más segura*, 💵 *doblar tu dinero (≥ +100)* y 🚀 *estilo ticket (≥ +145)*. Para cada objetivo elige la combinación con **menos selecciones**, porque cada selección extra suma margen de la casa.
   - Córners y remates a puerta **no** se incluyen: no hay datos gratuitos confiables.
 - Te dice la **probabilidad real de que salga completa**, el momio total mínimo y cuánto cobras con tu apuesta (`PARLAY_STAKE`, por defecto $5).
-- Consume 2 créditos por liga (ganador + goles): ~12 al día, ~360 al mes.
+- Consume 2 créditos por liga (ganador + goles): ~14 al día con 7 ligas, ~420 al mes.
 - Cada selección tiene que cumplir su momio mínimo en BetMéxico; si no, el margen de la casa se multiplica en la parlay.
 
 ### Lo que debes saber

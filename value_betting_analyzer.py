@@ -62,6 +62,7 @@ DEFAULTS = {
         "soccer_germany_bundesliga": "Bundesliga",
         "soccer_uefa_champs_league": "Champions League",
         "soccer_uefa_europa_league": "Europa League",
+        "soccer_mexico_ligamx": "Liga MX",
     },
     # Modo de trabajo:
     #   "seguro" -> picks de ALTA PROBABILIDAD (favoritos y doble oportunidad) con la
@@ -651,10 +652,11 @@ def settle_pending(cfg: dict) -> int:
         date_from = max(oldest.date(), (now - timedelta(days=9)).date())  # la API limita el rango a 10 días
         results = fetch_results_football_data(date_from.isoformat(), now.date().isoformat(), cfg)
     if cfg["ODDS_API_KEY"]:
-        # Europa League no está en el plan gratis de football-data; también cubre huecos.
+        # Europa League y Liga MX no están en el plan gratis de football-data.
         unmatched_sports = {r["sport_key"] for r in pending if r["sport_key"]}
         if cfg["FOOTBALL_DATA_KEY"]:
-            unmatched_sports = {s for s in unmatched_sports if s == "soccer_uefa_europa_league"}
+            unmatched_sports = {s for s in unmatched_sports
+                                if s in ("soccer_uefa_europa_league", "soccer_mexico_ligamx")}
         for sk in unmatched_sports:
             results += fetch_scores_odds_api(sk, cfg)
     n = settle_rows(rows, results)
