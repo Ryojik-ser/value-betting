@@ -366,13 +366,28 @@ def fetch_odds(sport_key: str, cfg: dict) -> tuple[list[dict], str | None]:
     if r.status_code == 404:
         return [], r.headers.get("x-requests-remaining")
     if r.status_code == 401:
-        n = len(cfg["ODDS_API_KEY"])
-        raise RuntimeError(f"The Odds-API rechazó la API Key (tiene {n} caracteres; debe tener 32). "
-                           "Vuelve a copiarla completa del correo y actualiza el secreto ODDS_API_KEY.")
+        raise RuntimeError(f"The Odds-API rechazó la API Key: {odds_key_diagnosis(cfg['ODDS_API_KEY'], r)}")
     if r.status_code == 429:
         raise RuntimeError("Cuota de The Odds-API agotada este mes.")
     r.raise_for_status()
     return r.json(), r.headers.get("x-requests-remaining")
+
+
+def odds_key_diagnosis(key: str, response) -> str:
+    """Explica por qué falló la clave sin mostrarla."""
+    try:
+        api_msg = response.json().get("message", "")
+    except Exception:
+        api_msg = response.text[:150]
+    problems = []
+    if len(key) != 32:
+        problems.append(f"tiene {len(key)} caracteres y debe tener 32")
+    bad = sorted({c for c in key if c not in "0123456789abcdef"})
+    if bad:
+        problems.append("contiene caracteres que no van en la clave: " + " ".join(repr(c) for c in bad)
+                        + " (solo lleva números y letras a-f en minúscula; ¿una O en vez de cero?)")
+    hint = "; ".join(problems) if problems else "el formato es correcto; revisa que sea la clave del último correo"
+    return f"{hint}. Respuesta de la API: {api_msg or response.status_code}"
 
 
 def fetch_scores_odds_api(sport_key: str, cfg: dict) -> list[dict]:
