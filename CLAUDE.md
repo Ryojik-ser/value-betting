@@ -29,7 +29,7 @@ Analizador de apuestas de fútbol que corre solo en **GitHub Actions** y envía 
 8. Render: secciones separadas por `SECTION_BREAK` (`\x1e`); `split_message` nunca corta una sección. HTML de Telegram (`<b> <i> <code> <blockquote expandable>`), sin anidar `<code>` dentro de otras etiquetas.
 
 ## Configuración
-Valores por defecto en `DEFAULTS`; se sobreescriben con `config.json` o variables de entorno / *Variables* de GitHub (`BANKROLL=50`, `STAKE_AMOUNT`, `PARLAY_STAKE`, `MODE`, `SAFE_MIN_PROB`…). Secrets: `TELEGRAM_TOKEN`, `ODDS_API_KEY`, `FOOTBALL_DATA_KEY` (pendiente de que el usuario la agregue).
+Valores por defecto en `DEFAULTS`; se sobreescriben con `config.json` o variables de entorno / *Variables* de GitHub (`BANKROLL=50`, `STAKE_AMOUNT`, `PARLAY_STAKE`, `MODE`, `SAFE_MIN_PROB`…). Secrets: `TELEGRAM_TOKEN`, `ODDS_API_KEY`, `FOOTBALL_DATA_KEY`.
 
 ## Calibración y banca
 - `calibration()` (90 días, legs `src=modelo`, mín. `CALIB_MIN`=30) → `_calib.factor` ∈ [0.85, 1] multiplica probabilidades ≈.
