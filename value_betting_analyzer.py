@@ -90,6 +90,11 @@ DEFAULTS = {
     "FOCUS_PLAYER": "Erling Haaland",
     "FOCUS_PLAYER_SHARE": 0.33,   # parte de los goles del equipo que anota (se recalcula con football-data)
     "FOCUS_PROPS": True,          # descargar momios de goleador (≈2 créditos por partido del equipo)
+    # Reglas de banca
+    "DAILY_MAX_BETS": 3,          # apuestas máximas recomendadas por día
+    "STREAK_ALERT": 3,            # pérdidas seguidas que activan el modo prudente (1 apuesta)
+    "STOP_LOSS_PCT": 0.40,        # si en 7 días pierdes ≥40 % de la banca: pausa
+    "CALIB_MIN": 30,              # selecciones liquidadas mínimas para autocalibrar el modelo
     "MARKETS": "h2h,totals",      # mercados a descargar (ganador + total de goles)
     "CURRENCY": "$",
     "REGIONS": "eu",              # eu incluye Pinnacle; puedes usar "eu,uk"
@@ -753,7 +758,8 @@ def record_bets(bets: list[dict], path: str) -> int:
             "status": "pendiente", "profit": "",
             "legs": json.dumps([{"event_id": lg.event_id, "sport_key": lg.sport_key, "home": lg.home,
                                  "away": lg.away, "kickoff": lg.kickoff.isoformat(), "code": lg.code,
-                                 "sel": lg.selection, "result": ""} for lg in legs], ensure_ascii=False),
+                                 "sel": lg.selection, "prob": round(lg.prob, 4), "src": lg.source,
+                                 "result": ""} for lg in legs], ensure_ascii=False),
         })
         seen.add(bet_id)
         added += 1
@@ -798,6 +804,61 @@ def bets_stats(path: str) -> dict:
         k["staked"] += float(r["stake"] or 0)
         k["profit"] += float(r["profit"] or 0)
     return out
+
+
+def calib_factor(cfg: dict) -> float:
+    return (cfg.get("_calib") or {}).get("factor", 1.0)
+
+
+def calibration(cfg: dict) -> dict:
+    """Compara lo que el modelo predijo con lo que pasó en las selecciones estimadas (≈)
+    de los últimos 90 días. Si acierta menos de lo esperado, baja sus probabilidades
+    (nunca las sube por encima del mercado)."""
+    since = datetime.now(timezone.utc) - timedelta(days=90)
+    n = wins = 0
+    exp = 0.0
+    for r in read_bets(bets_file(cfg)):
+        for lg in json.loads(r["legs"]):
+            if lg.get("src") != "modelo" or lg.get("result") not in ("G", "P") or "prob" not in lg:
+                continue
+            if datetime.fromisoformat(lg["kickoff"]) < since:
+                continue
+            n += 1
+            wins += lg["result"] == "G"
+            exp += float(lg["prob"])
+    factor = 1.0
+    if n >= cfg.get("CALIB_MIN", 30) and exp > 0:
+        factor = min(1.0, max(0.85, wins / exp))
+    return {"n": n, "wins": wins, "exp": exp, "factor": factor}
+
+
+def settled_sequence(cfg: dict) -> list[tuple[datetime, str, float]]:
+    """Todas las apuestas liquidadas en orden: (fecha del partido, estado, beneficio)."""
+    seq = []
+    for r in read_history(cfg["HISTORY_FILE"]):
+        if r["status"] in ("ganada", "perdida"):
+            seq.append((datetime.fromisoformat(r["kickoff"]), r["status"], float(r["profit"] or 0)))
+    for r in read_bets(bets_file(cfg)):
+        if r["status"] in ("ganada", "perdida"):
+            ko = max(datetime.fromisoformat(lg["kickoff"]) for lg in json.loads(r["legs"]))
+            seq.append((ko, r["status"], float(r["profit"] or 0)))
+    return sorted(seq, key=lambda t: t[0])
+
+
+def bankroll_rules(cfg: dict, seq: list | None = None) -> dict:
+    """Reglas de banca: racha de pérdidas y stop-loss semanal."""
+    seq = settled_sequence(cfg) if seq is None else seq
+    streak = 0
+    for _, status, _ in reversed(seq):
+        if status != "perdida":
+            break
+        streak += 1
+    week = datetime.now(timezone.utc) - timedelta(days=7)
+    week_profit = sum(p for ko, _, p in seq if ko >= week)
+    bank = cfg.get("BANKROLL") or 0
+    stop = bool(bank) and week_profit <= -cfg["STOP_LOSS_PCT"] * bank
+    max_bets = 0 if stop else 1 if streak >= cfg["STREAK_ALERT"] else cfg["DAILY_MAX_BETS"]
+    return {"streak": streak, "week_profit": week_profit, "stop": stop, "max_bets": max_bets}
 
 
 def settle_pending(cfg: dict) -> int:
@@ -885,6 +946,9 @@ def underdog_picks(reviews: list[MatchReview], cfg: dict) -> list[dict]:
              f"{dog_side}_scores"),
         ]
         best = None
+        f = calib_factor(cfg)
+        options = [(mk, sel, pr if price is not None or mk in ("1X2", "Doble oportunidad") else pr * f, price, code)
+                   for mk, sel, pr, price, code in options]
         for market, sel, prob, price, code in options:
             if not (0 < prob < 1) or prob < cfg["DOG_MIN_PROB"] or 1 / prob < cfg["DOG_MIN_ODDS"]:
                 continue
@@ -1042,7 +1106,9 @@ def market_legs(review: MatchReview, cfg: dict) -> list[Leg]:
     if po is not None:
         raw += [("Total de goles", "Más de 2.5 goles", po, "mercado", "over_2.5"),
                 ("Total de goles", "Menos de 2.5 goles", 1 - po, "mercado", "under_2.5")]
-    return [Leg(review.event_id, review.league, review.kickoff, h, a, mk, sel, p, src, code, review.sport_key)
+    f = calib_factor(cfg)
+    return [Leg(review.event_id, review.league, review.kickoff, h, a, mk, sel, p * f if src == "modelo" else p,
+                src, code, review.sport_key)
             for mk, sel, p, src, code in raw if 0 < p < 1]
 
 
@@ -1191,7 +1257,8 @@ def focus_analysis(review: MatchReview, cfg: dict, props: list[tuple[float, str]
     ]
     return {"review": review, "rival": rival, "home": home_side, "xg": (lh, la) if home_side else (la, lh),
             "share": share, "season": season, "market": market,
-            "picks": [pk for pk in picks if 0 < pk[2] < 1]}
+            "picks": [pk[:2] + ((pk[2] * calib_factor(cfg)) if pk[3] == "modelo" else pk[2],) + pk[3:]
+                      for pk in picks if 0 < pk[2] < 1]}
 
 
 # ---------------------------------------------------------------------------
@@ -1394,6 +1461,13 @@ def notes_section(reviews: list[MatchReview], cfg: dict, remaining: str | None) 
     if rest:
         items.append("• Sin pick sencillo: " + ", ".join(
             f"{r.kickoff.strftime('%H:%M')} {e(short_name(r.home))}–{e(short_name(r.away))}" for r in rest))
+    cal = cfg.get("_calib")
+    if cal and cal["n"]:
+        if cal["n"] >= cfg.get("CALIB_MIN", 30):
+            items.append(f"• Calibración (90 días): el modelo acertó {cal['wins']}/{cal['n']} vs "
+                         f"{cal['exp']:.0f} esperados → ajuste ×{cal['factor']:.2f}")
+        else:
+            items.append(f"• Calibración: {cal['n']}/{cfg.get('CALIB_MIN', 30)} selecciones ≈ liquidadas para empezar a ajustar")
     if remaining is not None:
         items.append(f"• Créditos de cuotas restantes: {e(str(remaining))}")
     items.append("+18 · Apuesta solo lo que puedas perder.")
@@ -1421,6 +1495,48 @@ def build_report(reviews: list[MatchReview], picks: list[Pick], cfg: dict, stats
     return SECTION_BREAK.join(sections)
 
 
+def plan_section(reviews: list[MatchReview], picks: list[Pick], cfg: dict) -> str:
+    """Plan del día según las reglas de banca: qué apostar y cuánto como máximo."""
+    e = html.escape
+    rules = cfg.get("_rules") or {"streak": 0, "stop": False, "max_bets": cfg["DAILY_MAX_BETS"], "week_profit": 0.0}
+    stake = cfg.get("STAKE_AMOUNT") or cfg["PARLAY_STAKE"]
+    lines = [DIV, "📋 <b>PLAN DEL DÍA</b>"]
+    if rules["stop"]:
+        lines += [f"⛔ <b>Pausa:</b> en 7 días vas {money(rules['week_profit'], cfg)} "
+                  f"(≥{cfg['STOP_LOSS_PCT'] * 100:.0f}% de tu banca).",
+                  "Hoy no apuestes; el informe sigue para que veas cómo salen los picks."]
+        return "\n".join(lines)
+    if rules["streak"] >= cfg["STREAK_ALERT"]:
+        lines.append(f"🔴 Llevas {rules['streak']} pérdidas seguidas: hoy <b>solo 1 apuesta</b>.")
+    options = []  # (etiqueta, prob, momio, partidos)
+    parlays = build_parlays(reviews, cfg)
+    if parlays:
+        par = parlays[0]
+        options.append((f"Parlay {par['name'].split(' ', 1)[-1]}", par["prob"], par["odds"],
+                        {lg.event_id for lg in par["legs"]}))
+    for c in underdog_picks(reviews, cfg):
+        if c["ev"] is not None and c["ev"] >= 0.02:
+            options.append((f"🐺 {short_name(c['leg'].selection)}", c["leg"].prob, c["leg"].min_odds,
+                            {c["leg"].event_id}))
+    for p in picks:
+        label = (f"Gana {short_name(p.selection)}" if p.outcome in ("home", "away")
+                 else f"{short_name(p.home if p.outcome == 'home_draw' else p.away)} o empate")
+        options.append((label, p.fair_prob, p.min_odds, {p.event_id}))
+    chosen, used = [], set()
+    for opt in options:  # sin repetir partido entre apuestas del plan
+        if len(chosen) < rules["max_bets"] and not (opt[3] & used):
+            chosen.append(opt)
+            used |= opt[3]
+    if not chosen:
+        lines.append("<i>Hoy no hay apuestas que cumplan los filtros.</i>")
+        return "\n".join(lines)
+    for i, (label, p, odds, _) in enumerate(chosen, 1):
+        lines.append(f"{i}. {e(label)} {c_odds(odds)} · {p * 100:.0f}%")
+    lines.append(f"Total: <b>{money(stake * len(chosen), cfg)}</b> · máximo {rules['max_bets']} apuesta"
+                 f"{'s' if rules['max_bets'] != 1 else ''} hoy")
+    return "\n".join(lines)
+
+
 def build_safe_report(reviews: list[MatchReview], picks: list[Pick], cfg: dict, stats: dict,
                       remaining: str | None, today: datetime, focus: str | None = None) -> str:
     e = html.escape
@@ -1437,7 +1553,8 @@ def build_safe_report(reviews: list[MatchReview], picks: list[Pick], cfg: dict, 
         f"📱 Apuesta solo si {e(cfg['MAIN_BOOK'])} paga <b>igual o más</b> que el momio indicado.",
         "Ej.: <code>-300</code> paga más que <code>-400</code>.",
     ])
-    sections = [header, focus, singles_section(picks, cfg), parlays_section(reviews, cfg),
+    sections = [header, plan_section(reviews, picks, cfg), focus, singles_section(picks, cfg),
+                parlays_section(reviews, cfg),
                 underdogs_section(reviews, cfg), history_section(stats, cfg, cfg.get("_bstats")),
                 notes_section(reviews, cfg, remaining)]
     return SECTION_BREAK.join(sc for sc in sections if sc)
@@ -1506,6 +1623,9 @@ def run(cfg: dict, demo: bool = False, telegram: bool = True) -> str:
                 print(f"✔ {n} picks anteriores liquidados.")
         except Exception as exc:  # la liquidación nunca debe impedir el informe
             print(f"⚠️  No se pudieron liquidar picks: {exc}")
+
+    if not demo:
+        cfg = {**cfg, "_calib": calibration(cfg), "_rules": bankroll_rules(cfg)}
 
     reviews: list[MatchReview] = []
     focus_event = None  # (kickoff, event, league)

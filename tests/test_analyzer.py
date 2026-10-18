@@ -68,7 +68,8 @@ def test_safe_mode_high_probability_picks():
     report = vba.strip_html(vba.run(cfg(MODE="seguro"), demo=True, telegram=False))
     assert "Arsenal o empate -296" in report
     assert "Gana Inter -197" in report                                # 1X pagaría < 1.20
-    assert report.index("Arsenal") < report.index("Inter")       # más probable primero
+    sec = report.split("SENCILLAS")[1]
+    assert sec.index("Arsenal") < sec.index("Inter")             # más probable primero
 
 
 def test_safe_mode_respects_min_prob():
@@ -95,7 +96,8 @@ def test_safe_mode_flags_market_value_first():
     finally:
         vba.demo_events = orig
     assert "⭐ Europa paga" in report
-    assert report.index("Inter") < report.index("Arsenal")
+    sec = report.split("SENCILLAS")[1]
+    assert sec.index("Inter") < sec.index("Arsenal")
 
 
 def test_american_odds():
@@ -259,3 +261,40 @@ def test_dixon_coles_matches_draws_better_than_plain_poisson():
     assert rho < 0 and abs(d_dc - fair[1]) < 0.01
     m = vba.score_matrix(lh, la, rho)
     assert abs(sum(map(sum, m)) - 1) < 1e-9
+
+
+def test_bankroll_rules_streak_and_stop():
+    c = cfg(BANKROLL=50)
+    now = vba.datetime.now(vba.timezone.utc)
+    seq = [(now - vba.timedelta(days=i), "perdida", -5.0) for i in (3, 2, 1)]
+    r = vba.bankroll_rules(c, seq)
+    assert r["streak"] == 3 and r["max_bets"] == 1 and not r["stop"]
+    seq += [(now, "perdida", -10.0)]
+    assert vba.bankroll_rules(c, seq)["stop"]            # -25 en 7 días ≥ 40 % de 50
+    ok = vba.bankroll_rules(c, [(now, "ganada", 3.0)])
+    assert ok["max_bets"] == 3 and ok["streak"] == 0
+
+
+def test_plan_respects_rules_and_no_repeated_match():
+    c = cfg(MODE="seguro", BANKROLL=50)
+    c["_rules"] = {"streak": 3, "stop": False, "max_bets": 1, "week_profit": -15.0}
+    rep = vba.strip_html(vba.run(c, demo=True, telegram=False))
+    assert "solo 1 apuesta" in rep and "máximo 1 apuesta hoy" in rep
+    c["_rules"] = {"streak": 0, "stop": True, "max_bets": 0, "week_profit": -25.0}
+    assert "Pausa" in vba.strip_html(vba.run(c, demo=True, telegram=False))
+
+
+def test_calibration_shrinks_model_probs(tmp_path):
+    c = cfg(HISTORY_FILE=str(tmp_path / "h.csv"))
+    ko = (vba.datetime.now(vba.timezone.utc) - vba.timedelta(days=2)).isoformat()
+    legs = [{"event_id": str(i), "kickoff": ko, "code": "over_1.5", "prob": 0.8, "src": "modelo",
+             "result": "G" if i < 24 else "P", "home": "a", "away": "b", "sport_key": "", "sel": ""} for i in range(40)]
+    vba.write_bets(vba.bets_file(c), [{"date": "", "kind": "parlay", "name": "", "bet_id": "x", "legs": vba.json.dumps(legs),
+                                       "prob": "0.1", "odds": "2", "stake": "5", "status": "perdida", "profit": "-5"}])
+    cal = vba.calibration(c)
+    assert cal["n"] == 40 and abs(cal["factor"] - 24 / 32) < 1e-9 or cal["factor"] == 0.85
+    reviews, c2 = _demo_reviews()
+    base = {lg.selection: lg.prob for lg in vba.market_legs(reviews[0], c2) if lg.source == "modelo"}
+    c2["_calib"] = {"factor": 0.9}
+    adj = {lg.selection: lg.prob for lg in vba.market_legs(reviews[0], c2) if lg.source == "modelo"}
+    assert all(abs(adj[k] - base[k] * 0.9) < 1e-9 for k in base)

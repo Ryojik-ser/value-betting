@@ -31,9 +31,12 @@ Analizador de apuestas de fútbol que corre solo en **GitHub Actions** y envía 
 ## Configuración
 Valores por defecto en `DEFAULTS`; se sobreescriben con `config.json` o variables de entorno / *Variables* de GitHub (`BANKROLL=50`, `STAKE_AMOUNT`, `PARLAY_STAKE`, `MODE`, `SAFE_MIN_PROB`…). Secrets: `TELEGRAM_TOKEN`, `ODDS_API_KEY`, `FOOTBALL_DATA_KEY` (pendiente de que el usuario la agregue).
 
+## Calibración y banca
+- `calibration()` (90 días, legs `src=modelo`, mín. `CALIB_MIN`=30) → `_calib.factor` ∈ [0.85, 1] multiplica probabilidades ≈.
+- `bankroll_rules()` → `_rules` (racha, stop-loss 7 días); `plan_section()` arma el plan del día sin repetir partidos.
+- `FOOTBALL_DATA_KEY` ya está configurada (resultados + goles de Haaland).
+
 ## Ideas pendientes (propuestas al usuario)
-- Calibración mensual automática (predicho vs. real) para ajustar el recorte.
-- Reglas de banca: máximo de apuestas por día, aviso tras rachas perdedoras.
 - API-Football (gratis ~100/día) para alineaciones, lesiones, córners y remates.
 
 ## Antes de subir

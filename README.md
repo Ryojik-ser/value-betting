@@ -51,6 +51,16 @@ Sale **arriba de todo**, pero **solo el día en que juega el City** (partidos de
 - Iconos: ✅ ≥60 % · ⚠️ 45–60 % · 🎲 menos de 45 %.
 - Cámbialo a otro equipo o jugador con `FOCUS_TEAM` y `FOCUS_PLAYER`.
 
+### 📋 Plan del día y reglas de banca
+
+- Arriba del informe sale el **plan del día**: máximo **3 apuestas** (`DAILY_MAX_BETS`), sin repetir partido entre ellas.
+- **3 pérdidas seguidas** (`STREAK_ALERT`) → modo prudente: solo 1 apuesta.
+- Si en 7 días pierdes **≥40 % de la banca** (`STOP_LOSS_PCT`) → ⛔ pausa: el informe sigue, pero recomienda no apostar.
+
+### 🎯 Autocalibración
+
+Cada informe compara lo que el modelo estimó (selecciones ≈) con lo que pasó en los últimos 90 días. Con **30+ selecciones liquidadas**, si acierta menos de lo esperado baja sus probabilidades (hasta ×0.85); nunca las sube. El resultado aparece en las notas del analista.
+
 ### Lo que debes saber
 
 - **Alta probabilidad no es certeza.** Con 75 % de acierto fallas 1 de cada 4. Una derrota a cuota 1.40 borra 2.5 aciertos.
