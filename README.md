@@ -22,11 +22,13 @@ The Odds-API no tiene cuotas de casas mexicanas (BetMéxico, Caliente, Codere MX
 ### Momios americanos y parlays
 
 - Todo se muestra en **momio americano** (como en BetMéxico) con la cuota decimal entre paréntesis. Ejemplo: `-296 (1.34)`. Un momio **paga más** cuanto más cerca de cero esté si es negativo (-250 paga más que -300) o cuanto más alto si es positivo.
-- **🎰 Parlays sugeridas**: cada día arma hasta 3 con los picks más probables:
-  - 🛡️ *Doble más segura*: las 2 selecciones más probables.
-  - ⚖️ *Triple equilibrada*: las 3 más probables, si juntas tienen ≥40 %.
-  - 💰 *Mayor pago*: la combinación que más paga sin bajar de 40 % de probabilidad.
+- **🎰 Parlays sugeridas** (una selección por partido, de 2 a 3 selecciones):
+  - Mercados: ganador (1X2), doble oportunidad, total de goles (más de 1.5 / menos de 3.5 / 2.5), ambos anotan, goles de un equipo y "Crear apuesta" (gana + más de 1.5 goles).
+  - Las probabilidades de goles salen de un **modelo de Poisson calibrado con las cuotas del mercado** (Pinnacle + consenso), con un recorte prudente. Se marcan como «est.».
+  - Objetivos: 🛡️ *doble más segura*, 💵 *doblar tu dinero (≥ +100)* y 🚀 *estilo ticket (≥ +145)*. Para cada objetivo elige la combinación con **menos selecciones**, porque cada selección extra suma margen de la casa.
+  - Córners y remates a puerta **no** se incluyen: no hay datos gratuitos confiables.
 - Te dice la **probabilidad real de que salga completa**, el momio total mínimo y cuánto cobras con tu apuesta (`PARLAY_STAKE`, por defecto $5).
+- Consume 2 créditos por liga (ganador + goles): ~12 al día, ~360 al mes.
 - Cada selección tiene que cumplir su momio mínimo en BetMéxico; si no, el margen de la casa se multiplica en la parlay.
 
 ### Lo que debes saber

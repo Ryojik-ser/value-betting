@@ -27,6 +27,7 @@ import csv
 import difflib
 import html
 import json
+import math
 import os
 import re
 import statistics
@@ -75,12 +76,16 @@ DEFAULTS = {
     "STAKE_AMOUNT": 5.0,          # monto fijo por apuesta sencilla (0 = usar SAFE_STAKE_PCT)
     "PARLAY_STAKE": 5.0,          # cuánto pondrías en cada parlay
     "PARLAY_MAX_LEGS": 3,         # máximo de selecciones por parlay
-    "PARLAY_MIN_PROB": 0.40,      # no sugerir parlays con menos de 40 % de probabilidad
+    "PARLAY_MIN_PROB": 0.35,      # no sugerir parlays con menos de 35 % de probabilidad
+    "LEG_MIN_PROB": 0.60,         # cada selección de parlay debe tener >= 60 %
+    "LEG_MIN_ODDS": 1.15,         # ...y pagar al menos 1.15 (-667)
+    "LEG_MAX_ODDS": 1.75,         # ...y como máximo 1.75 (-133)
+    "MARKETS": "h2h,totals",      # mercados a descargar (ganador + total de goles)
     "CURRENCY": "$",
     "REGIONS": "eu",              # eu incluye Pinnacle; puedes usar "eu,uk"
     "HOURS_AHEAD": 24,            # ventana de partidos a analizar
     "MIN_EV": 0.02,               # EV mínimo (2 %). 0 = cualquier valor positivo
-    "MAX_PICKS": 10,              # picks máximos por día
+    "MAX_PICKS": 5,               # picks sencillos máximos por día
     "MIN_ODDS": 1.40,             # evita cuotas demasiado bajas
     "MAX_ODDS": 6.00,             # evita long shots (mucho ruido estadístico)
     "MIN_BOOKS": 4,               # casas mínimas para confiar en el consenso
@@ -225,6 +230,9 @@ class MatchReview:
     best_ev: float | None = None
     best_prob: float | None = None
     picks: list[Pick] = field(default_factory=list)
+    event_id: str = ""
+    fair: list[float] | None = None     # prob. justa [local, empate, visitante]
+    p_over25: float | None = None       # prob. justa de más de 2.5 goles
 
 
 # ---------------------------------------------------------------------------
@@ -248,6 +256,41 @@ def _h2h_prices(bookmaker: dict, home: str, away: str) -> dict | None:
         if len(prices) == 3:
             return prices
     return None
+
+
+def _totals_25(bookmaker: dict) -> tuple[float, float] | None:
+    """Cuotas (más, menos) de 2.5 goles de una casa, si las ofrece."""
+    for market in bookmaker.get("markets", []):
+        if market.get("key") != "totals":
+            continue
+        over = under = None
+        for o in market.get("outcomes", []):
+            if abs(float(o.get("point", 0)) - 2.5) > 1e-9 or not o.get("price"):
+                continue
+            if o.get("name") == "Over":
+                over = float(o["price"])
+            elif o.get("name") == "Under":
+                under = float(o["price"])
+        if over and under and over > 1 and under > 1:
+            return over, under
+    return None
+
+
+def fair_over25(event: dict, sharp: str, weight: float) -> float | None:
+    probs, sharp_p = [], None
+    for bk in event.get("bookmakers", []):
+        t = _totals_25(bk)
+        if not t:
+            continue
+        p = remove_vig(list(t))[0]
+        if bk["key"] == sharp:
+            sharp_p = p
+        else:
+            probs.append(p)
+    if not probs and sharp_p is None:
+        return None
+    cons = statistics.median(probs) if probs else sharp_p
+    return weight * sharp_p + (1 - weight) * cons if sharp_p is not None else cons
 
 
 def analyze_event(event: dict, league: str, cfg: dict, tz) -> MatchReview:
@@ -284,6 +327,9 @@ def analyze_event(event: dict, league: str, cfg: dict, tz) -> MatchReview:
     else:
         fair = consensus
         source = "consenso"
+
+    review.event_id, review.fair = event["id"], fair
+    review.p_over25 = fair_over25(event, sharp, cfg["SHARP_WEIGHT"])
 
     base = dict(event_id=event["id"], sport_key=event.get("sport_key", ""), league=league,
                 kickoff=kickoff, home=home, away=away, n_books=len(all_prices), source=source)
@@ -375,10 +421,12 @@ def fetch_odds(sport_key: str, cfg: dict) -> tuple[list[dict], str | None]:
     """Devuelve (eventos, peticiones_restantes). 1 crédito por región y mercado."""
     r = _requests().get(
         f"{ODDS_API_URL}/sports/{sport_key}/odds",
-        params={"apiKey": cfg["ODDS_API_KEY"], "regions": cfg["REGIONS"], "markets": "h2h",
+        params={"apiKey": cfg["ODDS_API_KEY"], "regions": cfg["REGIONS"], "markets": cfg.get("MARKETS", "h2h"),
                 "oddsFormat": "decimal", "dateFormat": "iso"},
         timeout=30,
     )
+    if r.status_code == 422 and cfg.get("MARKETS", "h2h") != "h2h":
+        return fetch_odds(sport_key, {**cfg, "MARKETS": "h2h"})
     if r.status_code == 404:
         return [], r.headers.get("x-requests-remaining")
     if r.status_code == 401:
@@ -647,32 +695,141 @@ def odds_txt(decimal_odds: float) -> str:
     return f"{american(decimal_odds)} ({decimal_odds:.2f})"
 
 
-def build_parlays(picks: list[Pick], cfg: dict) -> list[dict]:
-    """Sugiere hasta 3 parlays con los picks más probables (un pick por partido):
-    la doble más segura, la triple más segura y la de mayor pago que aún tenga
-    al menos PARLAY_MIN_PROB de probabilidad."""
+# ---------------------------------------------------------------------------
+# Armador de parlays: modelo de goles (Poisson) calibrado con el mercado
+# ---------------------------------------------------------------------------
+@dataclass
+class Leg:
+    event_id: str
+    league: str
+    kickoff: datetime
+    home: str
+    away: str
+    market: str        # nombre del mercado como aparece en BetMéxico
+    selection: str
+    prob: float
+    source: str        # "mercado" (cuotas directas) o "modelo" (estimado de goles)
+
+    @property
+    def min_odds(self) -> float:
+        return 1 / self.prob
+
+
+_PMF_CACHE: dict[float, list[float]] = {}
+
+
+def _pmf(lam: float, n: int = 10) -> list[float]:
+    key = round(lam, 3)
+    if key not in _PMF_CACHE:
+        vals, term = [], math.exp(-lam)
+        for k in range(n + 1):
+            vals.append(term)
+            term *= lam / (k + 1)
+        _PMF_CACHE[key] = vals
+    return _PMF_CACHE[key]
+
+
+def score_matrix(lh: float, la: float) -> list[list[float]]:
+    ph, pa = _pmf(lh), _pmf(la)
+    return [[x * y for y in pa] for x in ph]
+
+
+def _summary(m: list[list[float]]) -> tuple[float, float, float, float]:
+    home = draw = away = over = 0.0
+    for i, row in enumerate(m):
+        for j, v in enumerate(row):
+            if i > j:
+                home += v
+            elif i == j:
+                draw += v
+            else:
+                away += v
+            if i + j >= 3:
+                over += v
+    return home, draw, away, over
+
+
+def fit_goals(fair: list[float], p_over25: float | None) -> tuple[float, float]:
+    """Goles esperados (local, visitante) que mejor reproducen las cuotas del mercado."""
+    def err(lh, la):
+        h, d, a, o = _summary(score_matrix(lh, la))
+        e = (h - fair[0]) ** 2 + (d - fair[1]) ** 2 + (a - fair[2]) ** 2
+        return e + ((o - p_over25) ** 2 if p_over25 is not None else 0.0)
+
+    grid = [x / 10 for x in range(2, 40)]
+    lh, la = min(((x, y) for x in grid for y in grid), key=lambda t: err(*t))
+    fine = [d / 50 for d in range(-5, 6)]
+    lh, la = min(((max(0.05, lh + dx), max(0.05, la + dy)) for dx in fine for dy in fine), key=lambda t: err(*t))
+    return lh, la
+
+
+def market_legs(review: MatchReview, cfg: dict) -> list[Leg]:
+    """Todas las selecciones posibles de un partido con su probabilidad."""
+    if not review.fair:
+        return []
+    ph, pd, pa = review.fair
+    po = review.p_over25
+    m = score_matrix(*fit_goals(review.fair, po))
+    cells = [(i, j, v) for i, row in enumerate(m) for j, v in enumerate(row)]
+
+    def P(cond):
+        return sum(v for i, j, v in cells if cond(i, j))
+
+    # Recorte prudente a lo estimado por el modelo (más grande si no hay mercado de goles)
+    cut = 0.02 if po is not None else 0.04
+    h, a = review.home, review.away
+    raw = [
+        ("1X2", f"Gana {h}", ph, "mercado"),
+        ("1X2", f"Gana {a}", pa, "mercado"),
+        ("Doble oportunidad", f"{h} o empate", ph + pd, "mercado"),
+        ("Doble oportunidad", f"{a} o empate", pa + pd, "mercado"),
+        ("Total de goles", "Más de 1.5 goles", P(lambda i, j: i + j >= 2) - cut, "modelo"),
+        ("Total de goles", "Menos de 3.5 goles", P(lambda i, j: i + j <= 3) - cut, "modelo"),
+        ("Ambos equipos anotan", "Sí", P(lambda i, j: i >= 1 and j >= 1) - cut, "modelo"),
+        ("Ambos equipos anotan", "No", P(lambda i, j: i == 0 or j == 0) - cut, "modelo"),
+        (f"Total goles {h}", f"{h} más de 0.5 goles", P(lambda i, j: i >= 1) - cut, "modelo"),
+        (f"Total goles {a}", f"{a} más de 0.5 goles", P(lambda i, j: j >= 1) - cut, "modelo"),
+        ("Crear apuesta", f"Gana {h} + más de 1.5 goles", P(lambda i, j: i > j and i + j >= 2) - cut, "modelo"),
+        ("Crear apuesta", f"Gana {a} + más de 1.5 goles", P(lambda i, j: j > i and i + j >= 2) - cut, "modelo"),
+    ]
+    if po is not None:
+        raw += [("Total de goles", "Más de 2.5 goles", po, "mercado"),
+                ("Total de goles", "Menos de 2.5 goles", 1 - po, "mercado")]
+    return [Leg(review.event_id, review.league, review.kickoff, h, a, mk, sel, p, src)
+            for mk, sel, p, src in raw if 0 < p < 1]
+
+
+def best_leg(review: MatchReview, cfg: dict) -> Leg | None:
+    ok = [lg for lg in market_legs(review, cfg)
+          if lg.prob >= cfg["LEG_MIN_PROB"] and cfg["LEG_MIN_ODDS"] <= lg.min_odds <= cfg["LEG_MAX_ODDS"]]
+    return max(ok, key=lambda lg: lg.prob) if ok else None
+
+
+def build_parlays(reviews: list[MatchReview], cfg: dict) -> list[dict]:
+    """Parlays con una selección por partido. Para cada objetivo de pago elige la
+    combinación con MENOS selecciones (menos margen de la casa) y más probabilidad."""
     from itertools import combinations
     from math import prod
 
-    pool = sorted(picks, key=lambda p: p.fair_prob, reverse=True)[:8]
-    max_legs = max(2, int(cfg["PARLAY_MAX_LEGS"]))
-    min_prob = cfg["PARLAY_MIN_PROB"]
+    pool = sorted(filter(None, (best_leg(r, cfg) for r in reviews)), key=lambda lg: lg.prob, reverse=True)[:10]
     if len(pool) < 2:
         return []
+    max_legs = max(2, int(cfg["PARLAY_MAX_LEGS"]))
+    combos = [c for n in range(2, max_legs + 1) for c in combinations(pool, n)]
 
     def make(name, legs):
-        prob = prod(p.fair_prob for p in legs)
+        prob = prod(lg.prob for lg in legs)
         return {"name": name, "legs": list(legs), "prob": prob, "odds": 1 / prob}
 
     out = [make("🛡️ Doble más segura", pool[:2])]
-    if max_legs >= 3 and len(pool) >= 3 and prod(p.fair_prob for p in pool[:3]) >= min_prob:
-        out.append(make("⚖️ Triple equilibrada", pool[:3]))
-    combos = [c for n in range(2, max_legs + 1) for c in combinations(pool, n)
-              if prod(p.fair_prob for p in c) >= min_prob]
-    if combos:
-        best = max(combos, key=lambda c: 1 / prod(p.fair_prob for p in c))
+    for name, target in (("💵 Para doblar tus $ (≥ +100)", 2.0), ("🚀 Estilo de tu ticket (≥ +145)", 2.45)):
+        cands = [c for c in combos if 1 / prod(lg.prob for lg in c) >= target
+                 and prod(lg.prob for lg in c) >= cfg["PARLAY_MIN_PROB"]]
+        if not cands:
+            continue
+        best = min(cands, key=lambda c: (len(c), 1 / prod(lg.prob for lg in c)))
         if all({id(x) for x in best} != {id(x) for x in o["legs"]} for o in out):
-            out.append(make("💰 Mayor pago (aún ≥{:.0f}%)".format(min_prob * 100), best))
+            out.append(make(name.replace("$", cfg.get("CURRENCY", "$") + f"{cfg['PARLAY_STAKE']:.0f}"), best))
     return out
 
 
@@ -761,10 +918,10 @@ def build_safe_report(reviews: list[MatchReview], picks: list[Pick], cfg: dict, 
             if p.odds and p.odds > p.min_odds:
                 lines.append(f"⭐ <b>Seguro + valor</b>: el mercado ya paga {pct(p.odds / p.min_odds - 1)} "
                              "por encima de la cuota justa")
-        lines += parlay_lines(picks, cfg)
     else:
-        lines.append(f"❌ Hoy no hay partidos con ≥{cfg['SAFE_MIN_PROB'] * 100:.0f}% de probabilidad "
-                     f"que paguen al menos {cfg['SAFE_MIN_ODDS']:.2f}. Hoy no se apuesta.")
+        lines.append(f"❌ Hoy no hay sencillas con ≥{cfg['SAFE_MIN_PROB'] * 100:.0f}% de probabilidad "
+                     f"que paguen al menos {cfg['SAFE_MIN_ODDS']:.2f}.")
+    lines += parlay_lines(reviews, cfg)
 
     rest = [r for r in reviews if not r.picks]
     if rest:
@@ -779,11 +936,11 @@ def build_safe_report(reviews: list[MatchReview], picks: list[Pick], cfg: dict, 
     return "\n".join(lines)
 
 
-def parlay_lines(picks: list[Pick], cfg: dict) -> list[str]:
+def parlay_lines(reviews: list[MatchReview], cfg: dict) -> list[str]:
     e = html.escape
     cur = e(cfg.get("CURRENCY", "$"))
     stake = cfg["PARLAY_STAKE"]
-    parlays = build_parlays(picks, cfg)
+    parlays = build_parlays(reviews, cfg)
     if not parlays:
         return []
     lines = ["", "<b>🎰 PARLAYS SUGERIDAS</b>",
@@ -792,9 +949,10 @@ def parlay_lines(picks: list[Pick], cfg: dict) -> list[str]:
     for par in parlays:
         payout = stake * par["odds"]
         lines += ["", f"<b>{par['name']}</b> · {len(par['legs'])} selecciones"]
-        for p in par["legs"]:
-            lines.append(f"• {OUTCOME_LABEL[p.outcome]} {e(p.selection)} ({e(p.home)} vs {e(p.away)}) "
-                         f"— mín. {american(p.min_odds)}")
+        for lg in par["legs"]:
+            tag = "" if lg.source == "mercado" else " ·est."
+            lines.append(f"• <b>{e(lg.selection)}</b> — mín. {american(lg.min_odds)} ({lg.prob * 100:.0f}%{tag})\n"
+                         f"   {e(lg.home)} vs {e(lg.away)} · {lg.kickoff.strftime('%H:%M')} · {e(lg.market)}")
         lines += [
             f"✅ Probabilidad de que salga completa: <b>{par['prob'] * 100:.0f}%</b> "
             f"(falla ≈ {round((1 - par['prob']) * 10)} de cada 10)",
@@ -805,7 +963,15 @@ def parlay_lines(picks: list[Pick], cfg: dict) -> list[str]:
     if bank and stake > 0.10 * bank:
         lines += ["", f"⚠️ {cur}{stake:.0f} por parlay es el {stake / bank * 100:.0f}% de tu banca. "
                   f"Dos parlays perdidas seguidas te quitan {min(2 * stake / bank, 1) * 100:.0f}%."]
-    lines.append("<i>Más selecciones = más pago pero menos probabilidad. Por encima de 3 casi siempre pierdes.</i>")
+    lines += [
+        "",
+        "<b>🧠 Notas del analista</b>",
+        "• Las cuotas de Pinnacle ya incluyen lesiones, rotaciones y noticias. Aun así, revisa la "
+        "alineación confirmada 1 h antes: si falta un titular clave del favorito, quita esa selección.",
+        "• «est.» = estimado con un modelo de goles calibrado con el mercado (ya con recorte prudente).",
+        "• Córners y remates a puerta no se incluyen: no hay datos gratuitos confiables y no invento números.",
+        "• Más selecciones = más margen de la casa. Preferimos 2–3 selecciones fuertes.",
+    ]
     return lines
 
 
@@ -815,9 +981,15 @@ def parlay_lines(picks: list[Pick], cfg: dict) -> list[str]:
 def demo_events() -> dict[str, list[dict]]:
     start = (datetime.now(timezone.utc) + timedelta(hours=6)).replace(minute=0, second=0, microsecond=0)
 
+    totals = {"Arsenal": (1.95, 1.90), "Real Betis": (2.05, 1.80), "Inter": (1.70, 2.15), "Getafe": (2.40, 1.60)}
+
     def bk(key, title, h, d, a, home, away):
-        return {"key": key, "title": title, "markets": [{"key": "h2h", "outcomes": [
-            {"name": home, "price": h}, {"name": away, "price": a}, {"name": "Draw", "price": d}]}]}
+        over, under = totals[home]
+        return {"key": key, "title": title, "markets": [
+            {"key": "h2h", "outcomes": [
+                {"name": home, "price": h}, {"name": away, "price": a}, {"name": "Draw", "price": d}]},
+            {"key": "totals", "outcomes": [
+                {"name": "Over", "price": over, "point": 2.5}, {"name": "Under", "price": under, "point": 2.5}]}]}
 
     def ev(i, sport, home, away, books):
         return {"id": f"demo{i}", "sport_key": sport, "home_team": home, "away_team": away,

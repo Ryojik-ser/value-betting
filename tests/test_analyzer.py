@@ -105,11 +105,24 @@ def test_american_odds():
     assert vba.american(2.00) == "+100"
 
 
-def test_parlays_respect_min_prob_and_stake():
-    picks = [p for r in [vba.analyze_event(ev, "L", cfg(MODE="seguro"), vba.timezone.utc)
-                         for evs in vba.demo_events().values() for ev in evs] for p in r.picks]
-    parlays = vba.build_parlays(picks, cfg(MODE="seguro"))
-    assert parlays and all(p["prob"] >= 0.40 for p in parlays[1:])
-    assert abs(parlays[0]["prob"] - picks[0].fair_prob * picks[1].fair_prob) < 1e-9
-    report = vba.strip_html(vba.run(cfg(MODE="seguro", BANKROLL=50, PARLAY_STAKE=15), demo=True, telegram=False))
-    assert "PARLAYS SUGERIDAS" in report and "30% de tu banca" in report
+def _demo_reviews(**kw):
+    c = cfg(MODE="seguro", **kw)
+    return [vba.analyze_event(ev, "L", c, vba.timezone.utc) for evs in vba.demo_events().values() for ev in evs], c
+
+
+def test_goal_model_matches_market():
+    reviews, c = _demo_reviews()
+    r = next(r for r in reviews if r.home == "Inter")
+    h, d, a, o = vba._summary(vba.score_matrix(*vba.fit_goals(r.fair, r.p_over25)))
+    assert abs(h - r.fair[0]) < 0.03 and abs(o - r.p_over25) < 0.03
+
+
+def test_parlays_one_leg_per_match_and_limits():
+    reviews, c = _demo_reviews(BANKROLL=50, PARLAY_STAKE=15)
+    parlays = vba.build_parlays(reviews, c)
+    assert parlays
+    for par in parlays:
+        assert len({lg.event_id for lg in par["legs"]}) == len(par["legs"])
+        assert all(lg.prob >= c["LEG_MIN_PROB"] for lg in par["legs"])
+    report = vba.strip_html(vba.run(c, demo=True, telegram=False))
+    assert "PARLAYS SUGERIDAS" in report and "30% de tu banca" in report and "Notas del analista" in report
