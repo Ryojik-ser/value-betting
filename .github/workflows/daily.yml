@@ -2,8 +2,8 @@ name: Informe diario de apuestas de valor
 
 on:
   schedule:
-    - cron: "7 14 * * *"   # 08:07 hora de Ciudad de México (UTC-6): informe oficial
-    - cron: "7 20 * * *"   # 14:07 hora de Ciudad de México: actualización de la tarde
+    - cron: "40 13 * * *"  # 07:40 CDMX (UTC-6); con el retraso de GitHub llega ~8:00: informe oficial
+    - cron: "40 19 * * *"  # 13:40 CDMX; llega ~14:00: actualización de la tarde
   workflow_dispatch: {}     # botón "Run workflow" para lanzarlo a mano
 
 concurrency:
@@ -28,7 +28,7 @@ jobs:
       PARLAY_STAKE: ${{ vars.PARLAY_STAKE }}
       STAKE_AMOUNT: ${{ vars.STAKE_AMOUNT }}
       HISTORY_FILE: data/picks_history.csv
-      RUN_KIND: ${{ github.event.schedule == '7 20 * * *' && 'tarde' || 'manana' }}
+      RUN_KIND: ${{ github.event.schedule == '40 19 * * *' && 'tarde' || 'manana' }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5

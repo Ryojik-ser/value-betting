@@ -13,7 +13,7 @@ Analizador de apuestas de fútbol que corre solo en **GitHub Actions** y envía 
 
 ## Archivos
 - `value_betting_analyzer.py` — todo el sistema (un solo archivo).
-- `.github/workflows/daily.yml` — 08:07 CDMX (`RUN_KIND=manana`, informe oficial, registra) y 14:07 (`tarde`, ventana 18 h, **no registra**).
+- `.github/workflows/daily.yml` — 07:40 CDMX, llega ~8:00 (`RUN_KIND=manana`, informe oficial, registra) y 13:40, llega ~14:00 (`tarde`, ventana 18 h, **no registra**).
 - `data/picks_history.csv` (sencillas), `data/bets_history.csv` (parlays/no favoritos/City), `data/telegram_chat_id.txt` — los escribe el bot.
 - `tests/test_analyzer.py` — `python -m pytest -q` (sin red, usa `demo_events()`).
 - `setup.py`, `run_daily.bat` — instalación alternativa en Windows.
