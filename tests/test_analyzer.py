@@ -298,3 +298,18 @@ def test_calibration_shrinks_model_probs(tmp_path):
     c2["_calib"] = {"factor": 0.9}
     adj = {lg.selection: lg.prob for lg in vba.market_legs(reviews[0], c2) if lg.source == "modelo"}
     assert all(abs(adj[k] - base[k] * 0.9) < 1e-9 for k in base)
+
+
+def test_special_parlays_report_only_leagues_and_no_record(tmp_path, monkeypatch):
+    c = vba.load_config()
+    c.update(MODE="seguro", ODDS_API_KEY="x", HISTORY_FILE=str(tmp_path / "h.csv"), REPORT="parlays",
+             ONLY_LEAGUES=["soccer_epl", "soccer_italy_serie_a"])
+    data = vba.demo_events()
+    called = []
+    monkeypatch.setattr(vba, "has_events", lambda *a: True)
+    monkeypatch.setattr(vba, "fetch_odds", lambda sk, cf: (called.append(sk), (data.get(sk, []), "400"))[1])
+    monkeypatch.setattr(vba, "fetch_player_props", lambda *a: [])
+    rep = vba.strip_html(vba.run(c, telegram=False))
+    assert set(called) == {"soccer_epl", "soccer_italy_serie_a"}
+    assert "PARLAYS DE PAGO ALTO" in rep and "Pago +150" in rep and "SENCILLAS" not in rep
+    assert not vba.read_bets(vba.bets_file(c))

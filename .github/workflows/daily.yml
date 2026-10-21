@@ -4,7 +4,16 @@ on:
   schedule:
     - cron: "40 13 * * *"  # 07:40 CDMX (UTC-6); con el retraso de GitHub llega ~8:00: informe oficial
     - cron: "40 19 * * *"  # 13:40 CDMX; llega ~14:00: actualización de la tarde
-  workflow_dispatch: {}     # botón "Run workflow" para lanzarlo a mano
+  workflow_dispatch:        # botón "Run workflow" para lanzarlo a mano
+    inputs:
+      report:
+        description: "completo o parlays (solo parlays de pago alto)"
+        default: "completo"
+        required: false
+      leagues:
+        description: "ligas separadas por coma (vacío = todas), ej. soccer_uefa_champs_league"
+        default: ""
+        required: false
 
 concurrency:
   group: informe
@@ -29,6 +38,8 @@ jobs:
       PARLAY_STAKE: ${{ vars.PARLAY_STAKE }}
       STAKE_AMOUNT: ${{ vars.STAKE_AMOUNT }}
       HISTORY_FILE: data/picks_history.csv
+      REPORT: ${{ inputs.report || 'completo' }}
+      ONLY_LEAGUES: ${{ inputs.leagues }}
       RUN_KIND: ${{ github.event.schedule == '40 19 * * *' && 'tarde' || 'manana' }}
     steps:
       - uses: actions/checkout@v4

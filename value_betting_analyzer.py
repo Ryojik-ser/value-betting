@@ -99,7 +99,9 @@ DEFAULTS = {
     "CURRENCY": "$",
     "REGIONS": "eu",              # eu incluye Pinnacle; puedes usar "eu,uk"
     "HOURS_AHEAD": 24,            # ventana de partidos a analizar
-    "RUN_KIND": "manana",         # "manana" (oficial, registra picks) o "tarde" (actualización, no registra)
+    "RUN_KIND": "manana",
+    "REPORT": "completo",         # "completo" o "parlays" (informe especial: solo parlays de pago alto, no registra)
+    "ONLY_LEAGUES": [],           # limitar a estas ligas (claves, p. ej. soccer_uefa_champs_league)         # "manana" (oficial, registra picks) o "tarde" (actualización, no registra)
     "MIN_EV": 0.02,               # EV mínimo (2 %). 0 = cualquier valor positivo
     "MAX_PICKS": 5,               # picks sencillos máximos por día
     "MIN_ODDS": 1.40,             # evita cuotas demasiado bajas
@@ -1136,8 +1138,9 @@ def build_parlays(reviews: list[MatchReview], cfg: dict) -> list[dict]:
 
     first = pool[0]
     second = next(lg for lg in pool if lg.event_id != first.event_id)
-    out = [make("🛡️ Segura", [first, second])]
-    for name, target in (("💵 Dobla tu dinero", 2.0), ("🚀 Estilo ticket", 2.45)):
+    out = [] if cfg.get("_no_safe") else [make("🛡️ Segura", [first, second])]
+    targets = cfg.get("_parlay_targets") or (("💵 Dobla tu dinero", 2.0), ("🚀 Estilo ticket", 2.45))
+    for name, target in targets:
         cands = [c for c in combos if 1 / prod(lg.prob for lg in c) >= target
                  and prod(lg.prob for lg in c) >= cfg["PARLAY_MIN_PROB"]]
         if not cands:
@@ -1540,6 +1543,18 @@ def plan_section(reviews: list[MatchReview], picks: list[Pick], cfg: dict) -> st
 def build_safe_report(reviews: list[MatchReview], picks: list[Pick], cfg: dict, stats: dict,
                       remaining: str | None, today: datetime, focus: str | None = None) -> str:
     e = html.escape
+    if cfg.get("REPORT") == "parlays":
+        leagues = ", ".join(sorted({r.league for r in reviews})) or ", ".join(cfg["LEAGUES"].values())
+        header = "\n".join([
+            "🎰 <b>PARLAYS DE PAGO ALTO</b>",
+            f"<i>{date_es(today)} · {e(leagues)} · {e(cfg['MAIN_BOOK'])}</i>",
+            "",
+            f"🔎 {len(reviews)} partidos revisados",
+            "Cada selección tiene <b>≥55 %</b> de probabilidad; juntas pagan más pero fallan más seguido.",
+            f"📱 Arma la parlay solo si cada selección paga en {e(cfg['MAIN_BOOK'])} igual o más que su momio.",
+        ])
+        body = parlays_section(reviews, cfg) or (DIV + "\n<i>No hay combinaciones que cumplan los filtros.</i>")
+        return SECTION_BREAK.join([header, body, notes_section(reviews, cfg, remaining)])
     n_par = len(build_parlays(reviews, cfg))
     n_dog = len(underdog_picks(reviews, cfg))
     stake = cfg.get("STAKE_AMOUNT") or cfg["PARLAY_STAKE"]
@@ -1610,6 +1625,15 @@ def run(cfg: dict, demo: bool = False, telegram: bool = True) -> str:
     afternoon = cfg.get("RUN_KIND") == "tarde"
     if afternoon:  # 2 p.m. → 8 a.m.: partidos de la tarde-noche con momios más frescos
         cfg = {**cfg, "HOURS_AHEAD": min(cfg["HOURS_AHEAD"], 18)}
+    special = cfg.get("REPORT") == "parlays"
+    if special:  # selecciones probables (≥55 %) que pagan más, combinadas hasta 4
+        cfg = {**cfg, "LEG_MIN_PROB": 0.55, "LEG_MIN_ODDS": 1.30, "LEG_MAX_ODDS": 1.90, "PARLAY_MAX_LEGS": 4,
+               "PARLAY_MIN_PROB": 0.20, "_no_safe": True,
+               "_parlay_targets": (("🎯 Pago +150", 2.5), ("🔥 Pago +200", 3.0), ("🚀 Pago +300", 4.0),
+                                   ("💎 Pago +400", 5.0))}
+    only = [x.strip().lower() for x in (cfg.get("ONLY_LEAGUES") or []) if x.strip()]
+    if only:
+        cfg = {**cfg, "LEAGUES": {k: v for k, v in cfg["LEAGUES"].items() if k in only or v.lower() in only}}
     tz = get_tz(cfg["TIMEZONE"])
     now = datetime.now(timezone.utc)
     horizon = now + timedelta(hours=cfg["HOURS_AHEAD"])
@@ -1667,7 +1691,7 @@ def run(cfg: dict, demo: bool = False, telegram: bool = True) -> str:
             return p.ev
     picks = sorted((p for r in reviews for p in r.picks), key=sort_key, reverse=True)[: cfg["MAX_PICKS"]]
 
-    record = not demo and not afternoon  # la tarde no registra: el historial mide el informe oficial
+    record = not demo and not afternoon and not special  # la tarde no registra: el historial mide el informe oficial
     if record:
         record_picks(picks, cfg["HISTORY_FILE"])
     stats = history_stats(cfg["HISTORY_FILE"]) if not demo else {"n": 0}
