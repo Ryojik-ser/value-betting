@@ -36,8 +36,12 @@ Valores por defecto en `DEFAULTS`; se sobreescriben con `config.json` o variable
 - `bankroll_rules()` → `_rules` (racha, stop-loss 7 días); `plan_section()` arma el plan del día sin repetir partidos.
 - `FOOTBALL_DATA_KEY` ya está configurada (resultados + goles de Haaland).
 
-## Ideas pendientes (propuestas al usuario)
-- API-Football (gratis ~100/día) para alineaciones, lesiones, córners y remates.
+## Informes especiales (workflow_dispatch con inputs)
+- `report=parlays` + `leagues=<clave>`: solo parlays de pago alto (+150…+400), no registra.
+- `report=corners`: córners de Liga MX con API-Football (secreto `API_FOOTBALL_KEY`, ~14 consultas); `corners_report()`, binomial negativa (var 1.3·media), prior de liga. No usa créditos de Odds-API.
+
+## Ideas pendientes
+- Remates a puerta / alineaciones con API-Football si el plan gratis lo permite.
 
 ## Antes de subir
 `python -m pyflakes *.py tests/*.py && python -m pytest -q`, luego commit en español y push a la rama.

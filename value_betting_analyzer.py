@@ -100,7 +100,10 @@ DEFAULTS = {
     "REGIONS": "eu",              # eu incluye Pinnacle; puedes usar "eu,uk"
     "HOURS_AHEAD": 24,            # ventana de partidos a analizar
     "RUN_KIND": "manana",
-    "REPORT": "completo",         # "completo" o "parlays" (informe especial: solo parlays de pago alto, no registra)
+    "REPORT": "completo",         # "completo", "parlays" o "corners"
+    "API_FOOTBALL_KEY": "",       # secreto de GitHub (api-football.com): estadísticas de córners
+    "CORNER_LEAGUE_ID": 262,      # id de la liga en API-Football (262 = Liga MX)
+    "CORNER_LAST": 8,             # partidos recientes por equipo para el promedio         # "completo" o "parlays" (informe especial: solo parlays de pago alto, no registra)
     "ONLY_LEAGUES": [],           # limitar a estas ligas (claves, p. ej. soccer_uefa_champs_league)         # "manana" (oficial, registra picks) o "tarde" (actualización, no registra)
     "MIN_EV": 0.02,               # EV mínimo (2 %). 0 = cualquier valor positivo
     "MAX_PICKS": 5,               # picks sencillos máximos por día
@@ -154,7 +157,7 @@ def load_config() -> dict:
             cfg[key] = json.loads(env) if env.strip()[:1] in "[{" else [s.strip() for s in env.split(",") if s.strip()]
         else:
             cfg[key] = env
-    for k in ("TELEGRAM_TOKEN", "TELEGRAM_CHAT_ID", "FOOTBALL_DATA_KEY", "ODDS_API_KEY"):
+    for k in ("TELEGRAM_TOKEN", "TELEGRAM_CHAT_ID", "FOOTBALL_DATA_KEY", "ODDS_API_KEY", "API_FOOTBALL_KEY"):
         # Quita espacios, saltos de línea y comillas que se cuelan al copiar desde el celular.
         cfg[k] = re.sub(r"\s+", "", str(cfg.get(k, "") or "")).strip("\"'")
         if cfg[k].startswith(PLACEHOLDER_PREFIX):
@@ -1619,12 +1622,186 @@ def demo_events() -> dict[str, list[dict]]:
 
 
 # ---------------------------------------------------------------------------
+# Córners (API-Football): promedios reales de los últimos partidos + modelo
+# ---------------------------------------------------------------------------
+API_FOOTBALL_URL = "https://v3.football.api-sports.io"
+CORNER_VAR_RATIO = 1.3   # los córners varían más que un Poisson: binomial negativa con var = 1.3·media
+CORNER_PRIOR_GAMES = 4   # partidos "ficticios" con el promedio de la liga para no fiarse de muestras chicas
+
+
+class ApiFootballError(RuntimeError):
+    pass
+
+
+def af_get(path: str, params: dict, cfg: dict) -> list:
+    r = _requests().get(f"{API_FOOTBALL_URL}/{path}", params=params,
+                        headers={"x-apisports-key": cfg["API_FOOTBALL_KEY"]}, timeout=30)
+    data = r.json() if r.headers.get("content-type", "").startswith("application/json") else {}
+    errors = data.get("errors")
+    if not r.ok or errors:
+        raise ApiFootballError(f"{path}: {errors or r.status_code}")
+    return data.get("response", [])
+
+
+def negbin_cdf(k: int, mean: float, var_ratio: float = CORNER_VAR_RATIO) -> float:
+    """P(X ≤ k) de una binomial negativa con media `mean` y varianza var_ratio·media."""
+    if mean <= 0:
+        return 1.0
+    p = 1 / var_ratio
+    r = mean * p / (1 - p)
+    prob = p ** r          # P(X=0)
+    total = prob
+    for x in range(1, k + 1):
+        prob *= (x - 1 + r) / x * (1 - p)
+        total += prob
+    return min(1.0, total)
+
+
+def corner_stats(fixtures: list[dict]) -> dict:
+    """{team_id: {"for": [...], "against": [...]}} a partir de partidos con estadísticas."""
+    out: dict = {}
+    for fx in fixtures:
+        st = fx.get("statistics") or []
+        if len(st) != 2:
+            continue
+        vals = {}
+        for side in st:
+            c = next((x["value"] for x in side.get("statistics", []) if x.get("type") == "Corner Kicks"), None)
+            if c is None:
+                break
+            vals[side["team"]["id"]] = int(c)
+        if len(vals) != 2:
+            continue
+        a, b = list(vals)
+        for t, o in ((a, b), (b, a)):
+            d = out.setdefault(t, {"for": [], "against": []})
+            d["for"].append(vals[t])
+            d["against"].append(vals[o])
+    return out
+
+
+def corner_projection(home_id: int, away_id: int, stats: dict) -> dict | None:
+    games = [v for d in stats.values() for v in d["for"]]
+    if len(games) < 10 or home_id not in stats or away_id not in stats:
+        return None
+    league_avg = statistics.mean(games)  # córners por equipo y partido
+
+    def avg(vals):
+        n = len(vals)
+        return (sum(vals) + CORNER_PRIOR_GAMES * league_avg) / (n + CORNER_PRIOR_GAMES)
+
+    h, a = stats[home_id], stats[away_id]
+    exp_h = (avg(h["for"]) + avg(a["against"])) / 2
+    exp_a = (avg(a["for"]) + avg(h["against"])) / 2
+    return {"home": exp_h, "away": exp_a, "total": exp_h + exp_a, "league_avg": league_avg,
+            "h_for": statistics.mean(h["for"]), "h_against": statistics.mean(h["against"]),
+            "a_for": statistics.mean(a["for"]), "a_against": statistics.mean(a["against"]),
+            "n_h": len(h["for"]), "n_a": len(a["for"])}
+
+
+def corner_lines(proj: dict, home: str, away: str) -> list[tuple[str, float]]:
+    """Selecciones de córners con su probabilidad (con recorte prudente de 2 puntos)."""
+    out = []
+    for line in (7.5, 8.5, 9.5, 10.5, 11.5):
+        over = 1 - negbin_cdf(int(line), proj["total"])
+        out += [(f"Más de {line} córners", over - 0.02), (f"Menos de {line} córners", 1 - over - 0.02)]
+    for name, mean in ((home, proj["home"]), (away, proj["away"])):
+        for line in (2.5, 3.5, 4.5, 5.5):
+            over = 1 - negbin_cdf(int(line), mean)
+            out.append((f"{name} más de {line} córners", over - 0.02))
+    return [(sel, p) for sel, p in out if 0 < p < 1]
+
+
+def corners_report(cfg: dict, now: datetime, tz) -> str:
+    e = html.escape
+    horizon = now + timedelta(hours=cfg["HOURS_AHEAD"])
+    league_id = cfg["CORNER_LEAGUE_ID"]
+    head = [f"🚩 <b>CÓRNERS · {date_es(now.astimezone(tz))}</b>",
+            f"<i>Estadísticas reales de API-Football · {e(cfg['MAIN_BOOK'])}</i>"]
+    if not cfg.get("API_FOOTBALL_KEY"):
+        return "\n".join(head + ["", "Falta el secreto <b>API_FOOTBALL_KEY</b> en GitHub."])
+    try:
+        lg = af_get("leagues", {"id": league_id, "current": "true"}, cfg)
+        season = lg[0]["seasons"][0]["year"]
+        league_name = lg[0]["league"]["name"]
+        d1 = now.astimezone(tz).date()
+        fixtures = af_get("fixtures", {"league": league_id, "season": season, "from": d1.isoformat(),
+                                       "to": (d1 + timedelta(days=1)).isoformat(), "timezone": cfg["TIMEZONE"]}, cfg)
+        upcoming = [f for f in fixtures
+                    if now <= datetime.fromtimestamp(f["fixture"]["timestamp"], timezone.utc) <= horizon]
+        if not upcoming:
+            return "\n".join(head + ["", f"No hay partidos de {e(league_name)} en las próximas "
+                                          f"{cfg['HOURS_AHEAD']} h."])
+        team_ids = {t["id"] for f in upcoming for t in (f["teams"]["home"], f["teams"]["away"])}
+        recent_ids: set = set()
+        for tid in team_ids:
+            for f in af_get("fixtures", {"team": tid, "league": league_id, "season": season,
+                                         "last": cfg["CORNER_LAST"]}, cfg):
+                recent_ids.add(f["fixture"]["id"])
+        ids = sorted(recent_ids)
+        detailed = []
+        for i in range(0, len(ids), 20):
+            detailed += af_get("fixtures", {"ids": "-".join(map(str, ids[i:i + 20]))}, cfg)
+    except ApiFootballError as exc:
+        return "\n".join(head + ["", "⚠️ <b>API-Football no entregó los datos</b>", f"<code>{e(str(exc))[:300]}</code>",
+                                 "<i>Si dice que el plan gratis no cubre esta temporada, hace falta un plan de pago "
+                                 "o otra fuente. No se inventan números.</i>"])
+    stats = corner_stats(detailed)
+    stake = cfg.get("STAKE_AMOUNT") or cfg["PARLAY_STAKE"]
+    sections = ["\n".join(head + ["", f"🔎 {len(upcoming)} partidos de {e(league_name)} · "
+                                      f"{len(detailed)} partidos recientes analizados"])]
+    for f in sorted(upcoming, key=lambda f: f["fixture"]["timestamp"]):
+        h, a = f["teams"]["home"], f["teams"]["away"]
+        ko = datetime.fromtimestamp(f["fixture"]["timestamp"], timezone.utc).astimezone(tz)
+        proj = corner_projection(h["id"], a["id"], stats)
+        lines = [DIV, f"<b>{e(h['name'])} vs {e(a['name'])}</b> · {ko.strftime('%H:%M')}"]
+        if not proj:
+            lines.append("<i>Sin suficientes estadísticas de córners para este partido.</i>")
+            sections.append("\n".join(lines))
+            continue
+        lines += [
+            f"📊 {e(h['name'])}: {proj['h_for']:.1f} a favor / {proj['h_against']:.1f} en contra "
+            f"({proj['n_h']} part.)",
+            f"📊 {e(a['name'])}: {proj['a_for']:.1f} a favor / {proj['a_against']:.1f} en contra "
+            f"({proj['n_a']} part.)",
+            f"🚩 Esperados: <b>{proj['total']:.1f}</b> ({e(h['name'])} {proj['home']:.1f} · "
+            f"{e(a['name'])} {proj['away']:.1f}) · liga {proj['league_avg'] * 2:.1f}",
+            "",
+        ]
+        picks = sorted((x for x in corner_lines(proj, h["name"], a["name"])
+                        if 0.55 <= x[1] and 1 / x[1] >= 1.25), key=lambda x: -x[1])[:4]
+        if not picks:
+            lines.append("<i>Ninguna línea con ≥55 % que pague al menos -400.</i>")
+        for sel, p in picks:
+            icon = "✅" if p >= 0.60 else "⚠️"
+            lines.append(f"{icon} {e(sel)} {c_odds(1 / p)} · ≈{p * 100:.0f}% · "
+                         f"+{money(stake * (1 / p - 1), cfg)}")
+        sections.append("\n".join(lines))
+    sections.append(DIV + "\n<blockquote expandable>🧠 <b>Cómo se calcula</b>\n"
+                    f"• Promedios de córners a favor y en contra de los últimos {cfg['CORNER_LAST']} partidos "
+                    "de liga de cada equipo, mezclados con el promedio de la liga para no fiarse de muestras chicas.\n"
+                    "• Esperados = (a favor del equipo + en contra del rival) ÷ 2, por equipo.\n"
+                    "• Probabilidades con una distribución que considera que los córners varían mucho de partido "
+                    "a partido, y un recorte prudente de 2 puntos.\n"
+                    "• Es un modelo estadístico, no un momio de mercado: úsalo en sencillas o como 1 selección "
+                    "de una parlay. Revisa alineaciones 1 h antes.\n"
+                    "+18 · Apuesta solo lo que puedas perder.</blockquote>")
+    return SECTION_BREAK.join(sections)
+
+
+# ---------------------------------------------------------------------------
 # Programa principal
 # ---------------------------------------------------------------------------
 def run(cfg: dict, demo: bool = False, telegram: bool = True) -> str:
     afternoon = cfg.get("RUN_KIND") == "tarde"
     if afternoon:  # 2 p.m. → 8 a.m.: partidos de la tarde-noche con momios más frescos
         cfg = {**cfg, "HOURS_AHEAD": min(cfg["HOURS_AHEAD"], 18)}
+    if cfg.get("REPORT") == "corners":  # informe especial de córners (no usa créditos de cuotas)
+        report = corners_report(cfg, datetime.now(timezone.utc), get_tz(cfg["TIMEZONE"]))
+        if telegram:
+            send_telegram(report, cfg)
+            print("✔ Informe de córners enviado a Telegram.")
+        return report
     special = cfg.get("REPORT") == "parlays"
     if special:  # selecciones probables (≥55 %) que pagan más, combinadas hasta 4
         cfg = {**cfg, "LEG_MIN_PROB": 0.55, "LEG_MIN_ODDS": 1.30, "LEG_MAX_ODDS": 1.90, "PARLAY_MAX_LEGS": 4,

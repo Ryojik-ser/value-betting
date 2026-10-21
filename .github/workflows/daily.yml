@@ -7,7 +7,7 @@ on:
   workflow_dispatch:        # botón "Run workflow" para lanzarlo a mano
     inputs:
       report:
-        description: "completo o parlays (solo parlays de pago alto)"
+        description: "completo, parlays (pago alto) o corners (córners Liga MX)"
         default: "completo"
         required: false
       leagues:
@@ -30,6 +30,7 @@ jobs:
       TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
       ODDS_API_KEY: ${{ secrets.ODDS_API_KEY }}
       FOOTBALL_DATA_KEY: ${{ secrets.FOOTBALL_DATA_KEY }}
+      API_FOOTBALL_KEY: ${{ secrets.API_FOOTBALL_KEY }}
       BANKROLL: ${{ vars.BANKROLL }}
       MAIN_BOOK: ${{ vars.MAIN_BOOK }}
       MIN_EV: ${{ vars.MIN_EV }}

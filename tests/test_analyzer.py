@@ -313,3 +313,47 @@ def test_special_parlays_report_only_leagues_and_no_record(tmp_path, monkeypatch
     assert set(called) == {"soccer_epl", "soccer_italy_serie_a"}
     assert "PARLAYS DE PAGO ALTO" in rep and "Pago +150" in rep and "SENCILLAS" not in rep
     assert not vba.read_bets(vba.bets_file(c))
+
+
+def _fx(fid, ts, h, a, ch=None, ca=None):
+    f = {"fixture": {"id": fid, "timestamp": ts}, "teams": {"home": {"id": h, "name": f"T{h}"},
+                                                         "away": {"id": a, "name": f"T{a}"}}}
+    if ch is not None:
+        f["statistics"] = [{"team": {"id": h}, "statistics": [{"type": "Corner Kicks", "value": ch}]},
+                           {"team": {"id": a}, "statistics": [{"type": "Corner Kicks", "value": ca}]}]
+    return f
+
+
+def test_negbin_cdf_sane():
+    assert abs(vba.negbin_cdf(200, 10) - 1) < 1e-9
+    assert 0.4 < vba.negbin_cdf(9, 10) < 0.6
+
+
+def test_corners_report_with_mocked_api(monkeypatch):
+    now = vba.datetime.now(vba.timezone.utc)
+    ts = int((now + vba.timedelta(hours=10)).timestamp())
+    past = [_fx(100 + i, 0, 1 + i % 4, 1 + (i + 1) % 4, 7 + i % 3, 3 + i % 2) for i in range(16)]
+
+    def fake(path, params, cfg):
+        if path == "leagues":
+            return [{"league": {"name": "Liga MX"}, "seasons": [{"year": 2026}]}]
+        if "ids" in params:
+            ids = {int(x) for x in params["ids"].split("-")}
+            return [f for f in past if f["fixture"]["id"] in ids]
+        if "team" in params:
+            return [f for f in past if params["team"] in (f["teams"]["home"]["id"], f["teams"]["away"]["id"])]
+        return [_fx(1, ts, 1, 2), _fx(2, ts, 3, 4)]
+
+    monkeypatch.setattr(vba, "af_get", fake)
+    c = cfg(API_FOOTBALL_KEY="k")
+    rep = vba.strip_html(vba.corners_report(c, now, vba.timezone.utc))
+    assert "CÓRNERS" in rep and "T1 vs T2" in rep and "Esperados" in rep and "córners" in rep
+
+
+def test_corners_report_shows_api_error(monkeypatch):
+    def boom(*a):
+        raise vba.ApiFootballError("plan: Free plans do not have access to this season")
+    monkeypatch.setattr(vba, "af_get", boom)
+    rep = vba.strip_html(vba.corners_report(cfg(API_FOOTBALL_KEY="k"), vba.datetime.now(vba.timezone.utc),
+                                            vba.timezone.utc))
+    assert "no entregó los datos" in rep and "Free plans" in rep
