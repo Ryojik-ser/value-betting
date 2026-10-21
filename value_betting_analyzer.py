@@ -66,10 +66,10 @@ DEFAULTS = {
     },
     # Modo de trabajo:
     #   "seguro" -> picks de ALTA PROBABILIDAD (favoritos y doble oportunidad) con la
-    #               cuota mínima que debes exigir en tu casa (BetMéxico).
+    #               cuota mínima que debes exigir en tu casa (Draftea).
     #   "valor"  -> picks de valor esperado usando las cuotas de casas europeas.
     "MODE": "seguro",
-    "MAIN_BOOK": "BetMéxico",     # tu casa principal (solo para el texto del informe)
+    "MAIN_BOOK": "Draftea",     # tu casa principal (solo para el texto del informe)
     "SAFE_MIN_PROB": 0.65,        # probabilidad mínima de acierto en modo seguro
     "SAFE_MIN_ODDS": 1.20,        # descarta picks que pagarían menos de 1.20
     "SAFE_STAKE_PCT": 0.02,       # stake fijo en modo seguro (2 % de la banca)
@@ -232,7 +232,7 @@ class Pick:
     stake: float
     n_books: int
     source: str         # "Pinnacle+consenso" o "consenso"
-    min_odds: float = 0.0   # cuota mínima a exigir en tu casa (BetMéxico)
+    min_odds: float = 0.0   # cuota mínima a exigir en tu casa (Draftea)
     kind: str = "valor"     # "valor" o "seguro"
 
 
@@ -644,7 +644,7 @@ def record_picks(picks: list[Pick], path: str) -> int:
             "home": p.home, "away": p.away, "outcome": p.outcome, "selection": p.selection,
             # En modo seguro se registra la cuota mínima (estimación conservadora del beneficio).
             "odds": f"{(p.min_odds if p.kind == 'seguro' else p.odds):.2f}",
-            "bookmaker": p.bookmaker if p.kind == "valor" else "BetMéxico (cuota mínima)", "fair_prob": f"{p.fair_prob:.4f}",
+            "bookmaker": p.bookmaker if p.kind == "valor" else "casa principal (momio mínimo)", "fair_prob": f"{p.fair_prob:.4f}",
             "ev": f"{p.ev:.4f}", "stake": f"{p.stake:.2f}", "status": "pendiente", "profit": "", "kind": p.kind,
         })
         added += 1
@@ -989,7 +989,7 @@ class Leg:
     kickoff: datetime
     home: str
     away: str
-    market: str        # nombre del mercado como aparece en BetMéxico
+    market: str        # nombre del mercado como aparece en Draftea
     selection: str
     prob: float
     source: str        # "mercado" (cuotas directas) o "modelo" (estimado de goles)
@@ -1444,7 +1444,7 @@ def history_section(stats: dict, cfg: dict, bstats: dict | None = None) -> str:
         lines.append(f"{'🟢' if roi >= 0 else '🔴'} <b>{BET_KINDS[key]}</b> · {k['wins']}/{k['n']} "
                      f"({k['wins'] / k['n'] * 100:.0f}%, esp. {k['exp'] / k['n'] * 100:.0f}%) · ROI {pct(roi)}")
     lines.append(f"Total: {'+' if tot_p >= 0 else '−'}{money(abs(tot_p), cfg)} sobre {money(tot_s, cfg)} apostados")
-    lines.append("<i>Calculado a momio mínimo; si cobraste más en BetMéxico, ganaste más.</i>")
+    lines.append(f"<i>Calculado a momio mínimo; si cobraste más en {html.escape(cfg['MAIN_BOOK'])}, ganaste más.</i>")
     return "\n".join(lines)
 
 

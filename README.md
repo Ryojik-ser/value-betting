@@ -1,27 +1,27 @@
 # Value Betting Analyzer
 
-Sistema automático que cada mañana revisa los partidos de **Premier League, La Liga, Serie A, Bundesliga, Champions, Europa League y Liga MX**, elige los picks con **más probabilidad de acierto** (o con valor esperado positivo) y te envía el informe a **Telegram**, con la cuota mínima que debes exigir en **BetMéxico**. Se configura y funciona 100 % desde el celular.
+Sistema automático que cada mañana revisa los partidos de **Premier League, La Liga, Serie A, Bundesliga, Champions, Europa League y Liga MX**, elige los picks con **más probabilidad de acierto** (o con valor esperado positivo) y te envía el informe a **Telegram**, con la cuota mínima que debes exigir en **Draftea**. Se configura y funciona 100 % desde el celular.
 
 ## Dos modos
 
 | Modo | Qué busca | Aciertos típicos | Para quién |
 |---|---|---|---|
-| **`seguro`** (por defecto) | El resultado más probable de cada partido: victoria del favorito (1/2) o **doble oportunidad** (1X/X2), con ≥65 % de probabilidad. Te dice la **cuota mínima** que debes exigir en **BetMéxico**. | 65–80 % | Quien prioriza ganar seguido. |
+| **`seguro`** (por defecto) | El resultado más probable de cada partido: victoria del favorito (1/2) o **doble oportunidad** (1X/X2), con ≥65 % de probabilidad. Te dice la **cuota mínima** que debes exigir en **Draftea**. | 65–80 % | Quien prioriza ganar seguido. |
 | **`valor`** | Cuotas mal puestas en casas europeas (EV positivo). | 30–45 % | Quien busca rentabilidad a largo plazo. |
 
 Cámbialo con la variable `MODE` (`seguro` o `valor`).
 
-### Por qué BetMéxico va con "cuota mínima"
+### Por qué Draftea va con "cuota mínima"
 
-The Odds-API no tiene cuotas de casas mexicanas (BetMéxico, Caliente, Codere MX), y extraerlas automáticamente de su web viola sus términos. Por eso el sistema calcula la **probabilidad real** con 20+ casas internacionales y te da la **cuota mínima** que necesitas:
+The Odds-API no tiene cuotas de casas mexicanas (Draftea, Caliente, Codere MX), y extraerlas automáticamente de su web viola sus términos. Por eso el sistema calcula la **probabilidad real** con 20+ casas internacionales y te da la **cuota mínima** que necesitas:
 
-- Cuota de BetMéxico **≥ mínima** → apuesta.
-- Cuota de BetMéxico **< mínima** → sáltalo. Aunque aciertes seguido, a la larga pierdes dinero.
+- Cuota de Draftea **≥ mínima** → apuesta.
+- Cuota de Draftea **< mínima** → sáltalo. Aunque aciertes seguido, a la larga pierdes dinero.
 - **⭐ Seguro + valor**: el pick es muy probable *y* alguna casa ya paga más que la cuota justa. Son los mejores del día y salen primero.
 
 ### Momios americanos y parlays
 
-- Todo se muestra en **momio americano** (como en BetMéxico) con la cuota decimal entre paréntesis. Ejemplo: `-296 (1.34)`. Un momio **paga más** cuanto más cerca de cero esté si es negativo (-250 paga más que -300) o cuanto más alto si es positivo.
+- Todo se muestra en **momio americano** (como en Draftea) con la cuota decimal entre paréntesis. Ejemplo: `-296 (1.34)`. Un momio **paga más** cuanto más cerca de cero esté si es negativo (-250 paga más que -300) o cuanto más alto si es positivo.
 - **🎰 Parlays sugeridas** (una selección por partido, de 2 a 3 selecciones):
   - Mercados: ganador (1X2), doble oportunidad, total de goles (más de 1.5 / menos de 3.5 / 2.5), ambos anotan, goles de un equipo y "Crear apuesta" (gana + más de 1.5 goles).
   - Las probabilidades de goles salen de un **modelo de Poisson con ajuste **Dixon-Coles** (corrige los marcadores bajos 0-0, 1-0, 1-1) calibrado con las cuotas del mercado** (Pinnacle + consenso), con un recorte prudente. Se marcan como «est.».
@@ -29,7 +29,7 @@ The Odds-API no tiene cuotas de casas mexicanas (BetMéxico, Caliente, Codere MX
   - Córners y remates a puerta **no** se incluyen: no hay datos gratuitos confiables.
 - Te dice la **probabilidad real de que salga completa**, el momio total mínimo y cuánto cobras con tu apuesta (`PARLAY_STAKE`, por defecto $5).
 - Consume 2 créditos por liga **solo si esa liga juega en las próximas 24 h** (antes lo comprueba con una consulta gratuita). Un día normal gasta 4–10 créditos.
-- Cada selección tiene que cumplir su momio mínimo en BetMéxico; si no, el margen de la casa se multiplica en la parlay.
+- Cada selección tiene que cumplir su momio mínimo en Draftea; si no, el margen de la casa se multiplica en la parlay.
 
 ### 🐺 No favoritos con respaldo
 
@@ -167,12 +167,12 @@ En Telegram los momios salen en recuadro, los títulos en negritas y las notas d
 
 ```
 📊 APUESTAS DEL DÍA
-Dom 18 oct · BetMéxico · $5 por apuesta
+Dom 18 oct · Draftea · $5 por apuesta
 
 🔎 5 partidos revisados
 ✅ 4 sencillas · 🎰 3 parlays · 🐺 3 no favoritos
 
-📱 Apuesta solo si BetMéxico paga igual o más que el momio indicado.
+📱 Apuesta solo si Draftea paga igual o más que el momio indicado.
 Ej.: -300 paga más que -400.
 
 ━━━━━━━━━━━━━━━

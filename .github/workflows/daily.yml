@@ -22,6 +22,7 @@ jobs:
       ODDS_API_KEY: ${{ secrets.ODDS_API_KEY }}
       FOOTBALL_DATA_KEY: ${{ secrets.FOOTBALL_DATA_KEY }}
       BANKROLL: ${{ vars.BANKROLL }}
+      MAIN_BOOK: ${{ vars.MAIN_BOOK }}
       MIN_EV: ${{ vars.MIN_EV }}
       MODE: ${{ vars.MODE }}
       SAFE_MIN_PROB: ${{ vars.SAFE_MIN_PROB }}

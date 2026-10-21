@@ -3,7 +3,7 @@
 Guía rápida para trabajar en este repo sin releer todo el código. Responde al usuario en **español, corto y claro**: lo lee desde el celular.
 
 ## Qué es
-Analizador de apuestas de fútbol que corre solo en **GitHub Actions** y envía un informe a **Telegram** (@ClaudepuestasEVbot). El usuario apuesta en **BetMéxico** con banca de **$50 MXN** y **$5 por apuesta/parlay**. BetMéxico no está en ninguna API: el sistema da el **momio mínimo** (americano) que debe pagar BetMéxico.
+Analizador de apuestas de fútbol que corre solo en **GitHub Actions** y envía un informe a **Telegram** (@ClaudepuestasEVbot). El usuario apuesta en **Draftea** con banca de **$50 MXN** y **$5 por apuesta/parlay**. Draftea no está en ninguna API: el sistema da el **momio mínimo** (americano) que debe pagar Draftea.
 
 ## Reglas del usuario
 - **No lanzar informes manuales** (workflow_dispatch) salvo que lo pida explícitamente. Cada informe gasta créditos de The Odds-API (500/mes).
