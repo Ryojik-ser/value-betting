@@ -102,3 +102,4 @@ date,event_id,sport_key,league,kickoff,home,away,outcome,selection,odds,bookmake
 2026-11-08,0d2e199bfba0db42871696c10037bad3,soccer_spain_la_liga,La Liga,2026-11-08T11:30:00-06:00,Celta Vigo,Levante,home_draw,Celta Vigo o empate,1.27,casa principal (momio mínimo),0.7900,0.0000,5.00,ganada,1.35,seguro
 2026-11-08,14aec7933e69c140965b1ae959076e70,soccer_mexico_ligamx,Liga MX,2026-11-08T18:00:00-06:00,Querétaro,Puebla,home_draw,Querétaro o empate,1.29,casa principal (momio mínimo),0.7730,0.0000,5.00,perdida,-5.00,seguro
 2026-11-08,339a6465fa5153fd8f31e487cf557cf0,soccer_spain_la_liga,La Liga,2026-11-08T09:15:00-06:00,Real Sociedad,Rayo Vallecano,home_draw,Real Sociedad o empate,1.31,casa principal (momio mínimo),0.7637,0.0000,5.00,ganada,1.55,seguro
+2026-11-14,0380db9fc7de24aed0c27138c02467e5,soccer_mexico_ligamx,Liga MX,2026-11-14T17:00:00-06:00,Querétaro,Monterrey,away_draw,Monterrey o empate,1.35,casa principal (momio mínimo),0.7386,0.0000,5.00,pendiente,,seguro
