@@ -38,6 +38,7 @@ Valores por defecto en `DEFAULTS`; se sobreescriben con `config.json` o variable
 
 ## Informes especiales (workflow_dispatch con inputs)
 - `report=parlays` + `leagues=<clave>`: solo parlays de pago alto (+150…+400), no registra.
+- `report=mensaje` + `file=mensajes/<archivo>.html`: envía a Telegram un mensaje ya redactado (HTML de Telegram), sin gastar créditos. Usado para parlays especiales armadas a mano (p. ej. México vs Jamaica).
 - `report=corners`: córners de Liga MX con API-Football (secreto `API_FOOTBALL_KEY`, ~14 consultas); `corners_report()`, binomial negativa (var 1.3·media), prior de liga. No usa créditos de Odds-API.
 
 ## Ideas pendientes

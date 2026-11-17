@@ -100,7 +100,8 @@ DEFAULTS = {
     "REGIONS": "eu",              # eu incluye Pinnacle; puedes usar "eu,uk"
     "HOURS_AHEAD": 24,            # ventana de partidos a analizar
     "RUN_KIND": "manana",
-    "REPORT": "completo",         # "completo", "parlays" o "corners"
+    "REPORT": "completo",         # "completo", "parlays", "corners" o "mensaje"
+    "MESSAGE_FILE": "",           # con REPORT=mensaje: archivo de la carpeta mensajes/ a enviar tal cual
     "API_FOOTBALL_KEY": "",       # secreto de GitHub (api-football.com): estadísticas de córners
     "CORNER_LEAGUE_ID": 262,      # id de la liga en API-Football (262 = Liga MX)
     "CORNER_LAST": 8,             # partidos recientes por equipo para el promedio         # "completo" o "parlays" (informe especial: solo parlays de pago alto, no registra)
@@ -1789,6 +1790,15 @@ def corners_report(cfg: dict, now: datetime, tz) -> str:
     return SECTION_BREAK.join(sections)
 
 
+def read_message_file(name: str) -> str:
+    """Lee un mensaje especial; solo se permiten archivos dentro de mensajes/."""
+    folder = (BASE_DIR / "mensajes").resolve()
+    path = (BASE_DIR / name).resolve()
+    if folder not in path.parents or not path.is_file():
+        raise RuntimeError(f"El mensaje debe ser un archivo dentro de mensajes/ (recibido: {name!r}).")
+    return path.read_text(encoding="utf-8").strip()
+
+
 # ---------------------------------------------------------------------------
 # Programa principal
 # ---------------------------------------------------------------------------
@@ -1796,6 +1806,12 @@ def run(cfg: dict, demo: bool = False, telegram: bool = True) -> str:
     afternoon = cfg.get("RUN_KIND") == "tarde"
     if afternoon:  # 2 p.m. → 8 a.m.: partidos de la tarde-noche con momios más frescos
         cfg = {**cfg, "HOURS_AHEAD": min(cfg["HOURS_AHEAD"], 18)}
+    if cfg.get("REPORT") == "mensaje":  # mensaje especial ya redactado (carpeta mensajes/)
+        report = read_message_file(cfg.get("MESSAGE_FILE", ""))
+        if telegram:
+            send_telegram(report, cfg)
+            print("✔ Mensaje especial enviado a Telegram.")
+        return report
     if cfg.get("REPORT") == "corners":  # informe especial de córners (no usa créditos de cuotas)
         report = corners_report(cfg, datetime.now(timezone.utc), get_tz(cfg["TIMEZONE"]))
         if telegram:

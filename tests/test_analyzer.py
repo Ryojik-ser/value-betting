@@ -357,3 +357,15 @@ def test_corners_report_shows_api_error(monkeypatch):
     rep = vba.strip_html(vba.corners_report(cfg(API_FOOTBALL_KEY="k"), vba.datetime.now(vba.timezone.utc),
                                             vba.timezone.utc))
     assert "no entregó los datos" in rep and "Free plans" in rep
+
+
+def test_message_report_reads_only_mensajes_folder():
+    rep = vba.run(cfg(REPORT="mensaje", MESSAGE_FILE="mensajes/mexico_jamaica_vuelta.html"), telegram=False)
+    assert "MÉXICO vs JAMAICA" in rep
+    for chunk in vba.split_message(rep):
+        assert chunk.count("<blockquote") == chunk.count("</blockquote>")
+    import pytest
+    with pytest.raises(RuntimeError):
+        vba.read_message_file("value_betting_analyzer.py")
+    with pytest.raises(RuntimeError):
+        vba.read_message_file("mensajes/../README.md")

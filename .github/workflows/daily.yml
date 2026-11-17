@@ -7,8 +7,12 @@ on:
   workflow_dispatch:        # botón "Run workflow" para lanzarlo a mano
     inputs:
       report:
-        description: "completo, parlays (pago alto) o corners (córners Liga MX)"
+        description: "completo, parlays (pago alto), corners (córners Liga MX) o mensaje"
         default: "completo"
+        required: false
+      file:
+        description: "con report=mensaje: archivo en mensajes/, ej. mensajes/mexico_jamaica.html"
+        default: ""
         required: false
       leagues:
         description: "ligas separadas por coma (vacío = todas), ej. soccer_uefa_champs_league"
@@ -41,6 +45,7 @@ jobs:
       HISTORY_FILE: data/picks_history.csv
       REPORT: ${{ inputs.report || 'completo' }}
       ONLY_LEAGUES: ${{ inputs.leagues }}
+      MESSAGE_FILE: ${{ inputs.file }}
       RUN_KIND: ${{ github.event.schedule == '40 19 * * *' && 'tarde' || 'manana' }}
     steps:
       - uses: actions/checkout@v4
